@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Agentic OS</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        fontFamily: {
+          sans: ['ui-sans-serif', 'system-ui', '-apple-system', 'Segoe UI', 'Roboto', 'sans-serif'],
+          mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Consolas', 'monospace'],
+        },
+      },
+    };
+  </script>
+</head>
+<body class="bg-zinc-950 text-zinc-100 font-sans h-screen overflow-hidden">
+  <div class="grid h-screen" style="grid-template-rows: auto 1fr auto; grid-template-columns: 280px 1fr 320px;">
+    <!-- Top bar -->
+    <header id="topbar" class="col-span-3 border-b border-zinc-800 px-4 py-2 flex items-center justify-between text-sm">
+      <div id="project-name" class="font-mono text-zinc-300">agentic-os</div>
+      <div class="flex items-center gap-3">
+        <div id="usage" class="text-zinc-400">Usage: —</div>
+        <button id="refresh-btn" class="rounded border border-zinc-700 px-2 py-1 hover:bg-zinc-900">Refresh</button>
+      </div>
+    </header>
+
+    <!-- Left pane: Skills -->
+    <aside id="skills-pane" class="border-r border-zinc-800 overflow-y-auto p-3">
+      <div class="text-xs uppercase tracking-wider text-zinc-500 mb-2">Skills</div>
+      <input id="skill-search" type="search" placeholder="Search skills..."
+             class="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-sm mb-3" />
+      <div id="skill-list"><!-- populated in Task 4 --></div>
+    </aside>
+
+    <!-- Center pane: Run -->
+    <main id="run-pane" class="overflow-y-auto p-4">
+      <div id="run-empty" class="text-zinc-500 text-sm">Pick a skill to begin.</div>
+      <div id="run-active" class="hidden"><!-- populated in Task 6 --></div>
+    </main>
+
+    <!-- Right pane: History -->
+    <aside id="history-pane" class="border-l border-zinc-800 overflow-y-auto p-3">
+      <div class="text-xs uppercase tracking-wider text-zinc-500 mb-2">Run history</div>
+      <div id="history-list"><!-- populated in Task 11 --></div>
+    </aside>
+
+    <!-- Bottom bar -->
+    <footer id="vault-changes-bar" class="col-span-3 border-t border-zinc-800 px-4 py-2 text-xs text-zinc-400 font-mono overflow-x-auto whitespace-nowrap">
+      Recent vault changes: —
+    </footer>
+  </div>
+
+  <script type="module">
+    // App state + module init goes here in subsequent tasks.
+    console.log('Agentic OS shell loaded');
+  </script>
+</body>
+</html>
