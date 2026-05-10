@@ -190,6 +190,36 @@
       if (skill) openRunPane(skill);
     });
 
+    let currentRunId = null;
+    let currentEventSource = null;
+
+    async function startRun() {
+      const prompt = $('#run-prompt').value.trim();
+      const skillName = $('#run-skill-name').textContent;
+      const skill = allSkills.find(s => s.name === skillName);
+      if (!skill || !prompt) return;
+
+      $('#run-submit').classList.add('hidden');
+      $('#run-stop').classList.remove('hidden');
+      $('#run-transcript').textContent = ''; // clear
+
+      const r = await fetch('/api/run', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ skillId: skill.id, prompt }),
+      });
+      const { runId } = await r.json();
+      currentRunId = runId;
+      attachStream(runId);
+    }
+
+    function attachStream(runId) {
+      // Streaming logic added in Task 8.
+      $('#run-transcript').textContent = `[run ${runId} started — streaming not yet wired]`;
+    }
+
+    $('#run-submit').addEventListener('click', startRun);
+
     $('#skill-search').addEventListener('input', (e) => {
       const q = e.target.value.trim().toLowerCase();
       if (!q) { renderSkills(allSkills); return; }
