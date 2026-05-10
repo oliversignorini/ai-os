@@ -12,7 +12,7 @@ Agentic OS is that surface. It spawns the same `claude` CLI you already have ins
 
 ## What's in the box
 
-- **Multi-turn chat** with token-by-token streaming — feels like the real thing because it *is* the real thing.
+- **Multi-turn chat** with token-by-token streaming and full markdown rendering — code blocks, headings, inline code, lists, links. Looks like a real chat app, because it is.
 - **Tabs + persistent conversations** — every chat is saved as JSONL on disk under `data/projects/<hash>/conversations/`. Refresh the page, your chat is still there. Resumable across server restarts via `claude --resume`.
 - **Per-project workspaces** — click the wordmark in the top-left to switch projects. Each project gets its own conversation history, skill scope, and vault-changes feed.
 - **Skill + file autocomplete** — type `/` to fuzzy-search every skill installed in `~/.claude/skills` and across your installed plugins (175+ in a typical setup). Type `@` to fuzzy-search files in the active project. Tab to insert. Claude reads `@path` mentions natively.

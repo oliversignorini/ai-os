@@ -540,6 +540,61 @@
     }
     .conv-card .meta { font-size: 10px; color: var(--ink-ghost); }
 
+    /* Markdown rendering inside assistant bubbles.
+       Tuned for the editorial/operator vibe — Fraunces for headings, monospace
+       for code, amber accent for inline code + links. */
+    .markdown-text { font-family: 'JetBrains Mono', monospace; line-height: 1.65; color: var(--ink); }
+    .markdown-text > *:first-child { margin-top: 0; }
+    .markdown-text > *:last-child { margin-bottom: 0; }
+    .markdown-text p { margin: 0 0 12px; }
+    .markdown-text h1, .markdown-text h2, .markdown-text h3, .markdown-text h4 {
+      font-family: 'Fraunces', serif;
+      font-weight: 500;
+      color: var(--ink);
+      letter-spacing: -0.01em;
+      margin: 18px 0 8px;
+    }
+    .markdown-text h1 { font-size: 22px; }
+    .markdown-text h2 { font-size: 18px; }
+    .markdown-text h3 { font-size: 15px; }
+    .markdown-text h4 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-dim); }
+    .markdown-text strong { color: var(--ink); font-weight: 600; }
+    .markdown-text em { color: var(--ink-dim); font-style: italic; }
+    .markdown-text a { color: var(--accent); text-decoration: underline; text-decoration-color: var(--accent-glow); text-underline-offset: 2px; }
+    .markdown-text a:hover { text-decoration-color: var(--accent); }
+    .markdown-text ul, .markdown-text ol { margin: 0 0 12px; padding-left: 22px; }
+    .markdown-text li { margin: 2px 0; }
+    .markdown-text li > p { margin: 0 0 4px; }
+    .markdown-text blockquote {
+      margin: 8px 0 12px; padding: 6px 12px;
+      border-left: 2px solid var(--accent);
+      color: var(--ink-dim); background: var(--bg-elev);
+    }
+    .markdown-text code {
+      font-family: 'JetBrains Mono', monospace; font-size: 12.5px;
+      background: var(--bg-elev); color: var(--accent);
+      padding: 1px 5px; border: 1px solid var(--edge);
+    }
+    .markdown-text pre {
+      margin: 8px 0 12px; padding: 12px 14px;
+      background: var(--bg-elev); border: 1px solid var(--edge);
+      border-left: 2px solid var(--phosphor);
+      overflow-x: auto; font-size: 12.5px; line-height: 1.55;
+    }
+    .markdown-text pre code {
+      background: transparent; border: 0; padding: 0;
+      color: var(--ink); font-size: inherit;
+    }
+    .markdown-text hr { border: 0; border-top: 1px solid var(--edge); margin: 16px 0; }
+    .markdown-text table {
+      border-collapse: collapse; margin: 8px 0 12px;
+      font-size: 12px;
+    }
+    .markdown-text th, .markdown-text td {
+      border: 1px solid var(--edge); padding: 4px 10px; text-align: left;
+    }
+    .markdown-text th { background: var(--bg-elev); color: var(--ink-dim); font-weight: 500; }
+
     /* Permission chip — shows current permission-mode for active conversation. */
     .permission-chip {
       font-family: 'JetBrains Mono', monospace; font-size: 10px;
@@ -656,6 +711,18 @@
   </div>
 
   <script type="module">
+    // Markdown rendering: marked parses GFM, DOMPurify sanitises against XSS.
+    // Both from esm.sh — same mental model as the Tailwind + fonts CDNs above.
+    // Pinned to majors; both libraries are stable.
+    import { marked } from 'https://esm.sh/marked@12';
+    import DOMPurify from 'https://esm.sh/dompurify@3';
+    marked.setOptions({ breaks: true, gfm: true });
+
+    function renderMarkdown(text) {
+      const html = marked.parse(String(text || ''));
+      return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
+    }
+
     const $ = (sel) => document.querySelector(sel);
 
     async function fetchJson(url) {
@@ -1124,17 +1191,25 @@
             pendingTools.set(ev.content_block.id, placeholder);
             body.appendChild(det);
           } else if (ev.content_block?.type === 'text') {
-            // Mark a span for this block — deltas append to it
-            const span = document.createElement('span');
-            span.dataset.blockIdx = String(ev.index);
-            body.appendChild(span);
+            // Markdown-rendered container for this text block. We store raw text
+            // on the element and re-render its innerHTML from scratch on every
+            // delta — fine for chat-sized replies (few KB), and avoids partial
+            // markdown rendering glitches that incremental approaches hit.
+            const div = document.createElement('div');
+            div.className = 'markdown-text';
+            div.dataset.blockIdx = String(ev.index);
+            div.dataset.rawText = '';
+            body.appendChild(div);
           }
         } else if (ev.type === 'content_block_delta') {
           const bubble = container.querySelector('.chat-msg.assistant.streaming');
           if (!bubble) return;
           if (ev.delta?.type === 'text_delta') {
-            const span = bubble.querySelector(`span[data-block-idx="${ev.index}"]`);
-            if (span) span.textContent += ev.delta.text;
+            const div = bubble.querySelector(`.markdown-text[data-block-idx="${ev.index}"]`);
+            if (div) {
+              div.dataset.rawText = (div.dataset.rawText || '') + ev.delta.text;
+              div.innerHTML = renderMarkdown(div.dataset.rawText);
+            }
           }
           // input_json_delta is partial JSON for tool args — we wait for the
           // final assistant event for tool args (simpler than streaming JSON parse).
@@ -1175,9 +1250,11 @@
         const body = bubble.querySelector('.body');
         for (const block of event.message.content) {
           if (block.type === 'text') {
-            const span = document.createElement('span');
-            span.textContent = block.text;
-            body.appendChild(span);
+            const div = document.createElement('div');
+            div.className = 'markdown-text';
+            div.dataset.rawText = block.text;
+            div.innerHTML = renderMarkdown(block.text);
+            body.appendChild(div);
           } else if (block.type === 'tool_use') {
             const det = document.createElement('details');
             det.className = 'tool-call is-finalized';
