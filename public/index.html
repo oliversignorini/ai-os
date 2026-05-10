@@ -164,9 +164,10 @@
         .join('');
     }
 
-    $('#refresh-btn').addEventListener('click', () => {
+    $('#refresh-btn').addEventListener('click', async () => {
       bootBars();
-      loadSkills();
+      await loadSkills(); // history depends on allSkills cache
+      loadHistory();
     });
 
     function openRunPane(skill) {
@@ -315,8 +316,42 @@
       container.scrollTop = container.scrollHeight;
     }
 
-    // Stub for loadHistory until Task 11 wires it
-    function loadHistory() {}
+    function statusIcon(status, exitCode) {
+      if (status === 'cancelled') return '⊘';
+      if (exitCode === 0) return '✓';
+      if (exitCode != null) return '✗';
+      return '⟳';
+    }
+
+    function statusColor(status, exitCode) {
+      if (status === 'cancelled') return 'text-zinc-500';
+      if (exitCode === 0) return 'text-emerald-400';
+      if (exitCode != null) return 'text-rose-400';
+      return 'text-amber-400';
+    }
+
+    function renderHistoryItem(run) {
+      const skillName = (allSkills.find(s => s.id === run.skillId) || { name: run.skillId }).name;
+      return `
+        <button class="history-item w-full text-left rounded p-2 hover:bg-zinc-900 text-xs"
+                data-run-id="${run.runId}">
+          <div class="flex items-center gap-2">
+            <span class="${statusColor(run.status, run.exitCode)}">${statusIcon(run.status, run.exitCode)}</span>
+            <span class="font-mono text-zinc-200 truncate">${skillName}</span>
+          </div>
+          <div class="text-[10px] text-zinc-500 ml-5">${relativeTime(run.startedAt)}</div>
+        </button>
+      `;
+    }
+
+    async function loadHistory() {
+      try {
+        const runs = await fetchJson('/api/runs?limit=50');
+        $('#history-list').innerHTML = runs.map(renderHistoryItem).join('');
+      } catch {
+        $('#history-list').innerHTML = '<div class="text-xs text-zinc-500">No history</div>';
+      }
+    }
 
     $('#run-submit').addEventListener('click', startRun);
 
@@ -339,8 +374,11 @@
       renderSkills(filtered);
     });
 
-    bootBars();
-    loadSkills();
+    (async () => {
+      bootBars();
+      await loadSkills(); // history depends on allSkills cache
+      loadHistory();
+    })();
   </script>
 </body>
 </html>
