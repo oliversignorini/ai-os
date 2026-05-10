@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "node server-stub.mjs",
-    "start": "node server.mjs"
+    "start": "node server.mjs --project .",
+    "test": "node --test \"test/**/*.test.mjs\""
   },
   "engines": {
     "node": ">=22"
