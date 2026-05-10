@@ -117,6 +117,46 @@ test('GET /api/runs/:id/stream forwards stdout as SSE', async () => {
   assert.match(received, /data: \{"type":"result"/);
 });
 
+test('Child exit persists run record + transcript; GET /api/runs/:id returns them', async () => {
+  let pendingChild;
+  await new Promise((res) => app.server.close(res));
+  const dataDir = await mkdtemp(join(tmpdir(), 'agentic-server-data-'));
+  app = await createApp({
+    projectDir, dataDir,
+    userSkillsDir: '/no', statsCachePath: '/no',
+    spawnRun: () => { pendingChild = fakeChild(); return { child: pendingChild }; },
+  });
+  await new Promise((res) => app.server.listen(0, res));
+  address = `http://localhost:${app.server.address().port}`;
+
+  const startRes = await fetch(`${address}/api/run`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ skillId: 'project/project-foo', prompt: '/p' }),
+  });
+  const { runId } = await startRes.json();
+
+  pendingChild.stdout.push('{"type":"system","subtype":"init"}\n');
+  pendingChild.stdout.push('{"type":"result","subtype":"success","exit_code":0}\n');
+  await new Promise(r => setImmediate(r));
+  await new Promise(r => setImmediate(r));
+  pendingChild.emit('exit', 0);
+
+  await new Promise(r => setTimeout(r, 100));
+
+  const runsRes = await fetch(`${address}/api/runs`);
+  const runs = await runsRes.json();
+  assert.ok(runs.find(r => r.runId === runId), 'run record persisted to runs.jsonl');
+
+  const oneRes = await fetch(`${address}/api/runs/${runId}`);
+  assert.equal(oneRes.status, 200);
+  const data = await oneRes.json();
+  assert.equal(data.runId, runId);
+  assert.equal(data.exitCode, 0);
+  assert.equal(data.transcript.length, 2);
+  assert.equal(data.transcript[0].type, 'system');
+});
+
 test('POST /api/runs/:id/cancel kills the child', async () => {
   let killedWith = null;
   await new Promise((res) => app.server.close(res));

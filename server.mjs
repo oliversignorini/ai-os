@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { scanSkillDirs } from './lib/skills.mjs';
-import { readRuns, lastRunAtBySkillId } from './lib/runs.mjs';
+import { readRuns, appendRun, appendTranscriptEvent, readTranscript, lastRunAtBySkillId } from './lib/runs.mjs';
 import { vaultChanges } from './lib/vault-changes.mjs';
 import { readUsage } from './lib/usage.mjs';
 
@@ -92,6 +92,7 @@ export async function createApp(opts) {
           stdoutBuf: '',
           eventListeners: [], // line → string callbacks
           subscribers: [],    // active res objects (for .end() on exit)
+          writeChain: Promise.resolve(), // serializes transcript appends
           finalEvents: null,
         });
 
@@ -108,13 +109,17 @@ export async function createApp(opts) {
             lineBuf = lineBuf.slice(nl + 1);
             if (!line) continue;
             for (const listener of r.eventListeners) listener(line);
+            // Persist each event to the per-run transcript file (serialized per run)
+            let parsed;
+            try { parsed = JSON.parse(line); } catch { continue; }
+            r.writeChain = r.writeChain.then(() => appendTranscriptEvent(dataDir, runId, parsed)).catch(() => {});
           }
         });
 
-        child.on('exit', (code) => {
+        child.on('exit', async (code) => {
           const r = activeRuns.get(runId);
           if (!r) return;
-          r.status = 'ended';
+          r.status = r.status === 'cancelled' ? 'cancelled' : (code === 0 ? 'ok' : 'error');
           r.exitCode = code;
           r.endedAt = new Date().toISOString();
           // Defer SSE close so any in-flight stdout 'data' events flush to subscribers first
@@ -123,7 +128,15 @@ export async function createApp(opts) {
               try { subscriber.end(); } catch {}
             }
           });
-          // Persistence happens in Task 9
+          // Wait for any pending transcript writes before recording the run
+          await r.writeChain.catch(() => {});
+          await appendRun(dataDir, {
+            runId, skillId: r.skillId, prompt: r.prompt,
+            startedAt: r.startedAt, endedAt: r.endedAt,
+            exitCode: code, status: r.status,
+          }).catch(() => {});
+          // Keep entry in activeRuns briefly so reattach within ~60s can replay
+          setTimeout(() => activeRuns.delete(runId), 60_000).unref();
         });
 
         return send(res, 200, { runId });
@@ -158,6 +171,24 @@ export async function createApp(opts) {
 
         if (r.status === 'ended') res.end();
         return;
+      }
+      if (method === 'GET' && url.match(/^\/api\/runs\/[^/]+$/)) {
+        const runId = url.split('/').pop();
+        const active = activeRuns.get(runId);
+        if (active) {
+          const transcript = await readTranscript(dataDir, runId);
+          return send(res, 200, {
+            runId, skillId: active.skillId, prompt: active.prompt,
+            startedAt: active.startedAt, endedAt: active.endedAt || null,
+            exitCode: active.exitCode ?? null, status: active.status,
+            transcript,
+          });
+        }
+        const allRuns = await readRuns(dataDir, Number.MAX_SAFE_INTEGER);
+        const run = allRuns.find(r => r.runId === runId);
+        if (!run) return send(res, 404, { error: 'not found' });
+        const transcript = await readTranscript(dataDir, runId);
+        return send(res, 200, { ...run, transcript });
       }
       if (method === 'POST' && url.match(/^\/api\/runs\/[^/]+\/cancel$/)) {
         const runId = url.split('/')[3];
