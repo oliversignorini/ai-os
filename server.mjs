@@ -86,6 +86,29 @@ export async function createApp(opts) {
         const startedAt = new Date().toISOString();
         const { child } = spawnRun({ skillName: skill.name, prompt, projectDir });
 
+        // Critical: catch spawn errors so a bad `claude` path / missing binary
+        // doesn't crash the whole server with an unhandled 'error' event.
+        child.on('error', (err) => {
+          const r = activeRuns.get(runId);
+          if (!r) return;
+          r.status = 'error';
+          r.exitCode = -1;
+          r.endedAt = new Date().toISOString();
+          // Synthesise an SSE-friendly error event for live subscribers + transcript
+          const errLine = JSON.stringify({ type: 'system', subtype: 'spawn_error', message: err.message });
+          for (const listener of r.eventListeners) listener(errLine);
+          for (const subscriber of r.subscribers || []) {
+            try { subscriber.end(); } catch {}
+          }
+          r.writeChain = r.writeChain.then(() => appendTranscriptEvent(dataDir, runId, JSON.parse(errLine))).catch(() => {});
+          r.writeChain.then(() => appendRun(dataDir, {
+            runId, skillId: r.skillId, prompt: r.prompt,
+            startedAt: r.startedAt, endedAt: r.endedAt,
+            exitCode: -1, status: 'error',
+          })).catch(() => {});
+          setTimeout(() => activeRuns.delete(runId), 60_000).unref();
+        });
+
         activeRuns.set(runId, {
           child, startedAt, skillId, prompt,
           status: 'running',
@@ -114,6 +137,17 @@ export async function createApp(opts) {
             try { parsed = JSON.parse(line); } catch { continue; }
             r.writeChain = r.writeChain.then(() => appendTranscriptEvent(dataDir, runId, parsed)).catch(() => {});
           }
+        });
+
+        // Capture stderr as a synthetic event so it surfaces in the UI / transcript.
+        // Claude's stream-json mode keeps real protocol on stdout; stderr usually
+        // only appears for spawn-time failures (missing --verbose, bad path, etc.).
+        child.stderr.on('data', (d) => {
+          const r = activeRuns.get(runId);
+          if (!r) return;
+          const errLine = JSON.stringify({ type: 'system', subtype: 'stderr', text: d.toString('utf8') });
+          for (const listener of r.eventListeners) listener(errLine);
+          r.writeChain = r.writeChain.then(() => appendTranscriptEvent(dataDir, runId, JSON.parse(errLine))).catch(() => {});
         });
 
         child.on('exit', async (code) => {
@@ -218,12 +252,20 @@ function readBody(req) {
 }
 
 function makeSpawnRun(claudePath) {
+  // On Windows, `claude` is a .cmd shim. Node 18+ refuses to spawn .cmd files
+  // directly (CVE-2024-27980 mitigation), so we route through the shell. On
+  // POSIX we spawn directly. Args are passed as an array — Node escapes them
+  // for the chosen shell. Prompts containing shell metacharacters are still
+  // a theoretical injection vector here; this is a personal-use dev tool, but
+  // a v1.x improvement should pass the prompt via stdin instead of argv.
+  const useShell = process.platform === 'win32';
   return function spawnRun({ skillName, prompt, projectDir }) {
     const child = spawn(claudePath, [
       '-p', prompt,
       '--output-format', 'stream-json',
+      '--verbose', // required by claude when --output-format=stream-json + --print
       '--permission-mode', 'bypassPermissions',
-    ], { cwd: projectDir });
+    ], { cwd: projectDir, shell: useShell });
     return { child };
   };
 }
@@ -248,10 +290,16 @@ function findClaudeOnPath() {
     child.on('error', () => reject(new Error('`claude` CLI not found on PATH. Install Claude Code first.')));
     child.on('exit', (code) => {
       if (code !== 0) return reject(new Error('`claude` CLI not found on PATH. Install Claude Code first.'));
-      // `where` may return multiple paths (one per line) — take the first non-empty.
-      const path = stdout.split(/\r?\n/).map(s => s.trim()).find(Boolean);
-      if (!path) return reject(new Error('`claude` CLI path could not be resolved'));
-      resolve(path);
+      const paths = stdout.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+      if (!paths.length) return reject(new Error('`claude` CLI path could not be resolved'));
+      // On Windows, `where` returns the bare shim first AND the .cmd. The bare shim is a
+      // POSIX shell script that Node can't spawn directly — we need a Windows-executable
+      // path (.cmd / .exe / .bat). Prefer those if present.
+      if (process.platform === 'win32') {
+        const winExec = paths.find(p => /\.(cmd|exe|bat|ps1)$/i.test(p));
+        return resolve(winExec || paths[0]);
+      }
+      resolve(paths[0]);
     });
   });
 }
