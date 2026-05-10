@@ -159,7 +159,15 @@ export async function createApp(opts) {
         if (r.status === 'ended') res.end();
         return;
       }
-      // GET /api/runs/:id, POST /api/runs/:id/cancel — Tasks 8-9
+      if (method === 'POST' && url.match(/^\/api\/runs\/[^/]+\/cancel$/)) {
+        const runId = url.split('/')[3];
+        const r = activeRuns.get(runId);
+        if (!r) return send(res, 404, { error: 'not found' });
+        try { r.child.kill('SIGTERM'); } catch {}
+        r.status = 'cancelled';
+        return send(res, 200, { ok: true });
+      }
+      // GET /api/runs/:id — Task 9
       return serveStatic(req, res, publicDir);
     } catch (err) {
       send(res, 500, { error: err.message });

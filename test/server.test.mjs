@@ -117,6 +117,38 @@ test('GET /api/runs/:id/stream forwards stdout as SSE', async () => {
   assert.match(received, /data: \{"type":"result"/);
 });
 
+test('POST /api/runs/:id/cancel kills the child', async () => {
+  let killedWith = null;
+  await new Promise((res) => app.server.close(res));
+  app = await createApp({
+    projectDir,
+    dataDir: await mkdtemp(join(tmpdir(), 'agentic-server-data-')),
+    userSkillsDir: '/no',
+    statsCachePath: '/no',
+    spawnRun: () => {
+      const ee = new EventEmitter();
+      ee.stdout = new Readable({ read() {} });
+      ee.stderr = new Readable({ read() {} });
+      ee.kill = (sig) => { killedWith = sig; setImmediate(() => ee.emit('exit', null)); };
+      return { child: ee };
+    },
+  });
+  await new Promise((res) => app.server.listen(0, res));
+  address = `http://localhost:${app.server.address().port}`;
+
+  const startRes = await fetch(`${address}/api/run`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ skillId: 'project/project-foo', prompt: '/p' }),
+  });
+  const { runId } = await startRes.json();
+
+  const cancelRes = await fetch(`${address}/api/runs/${runId}/cancel`, { method: 'POST' });
+  assert.equal(cancelRes.status, 200);
+  assert.deepEqual(await cancelRes.json(), { ok: true });
+  assert.equal(killedWith, 'SIGTERM');
+});
+
 test('POST /api/run returns runId, child spawned via factory', async () => {
   const calls = [];
   await new Promise((res) => app.server.close(res));
