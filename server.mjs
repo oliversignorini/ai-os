@@ -90,19 +90,76 @@ export async function createApp(opts) {
           child, startedAt, skillId, prompt,
           status: 'running',
           stdoutBuf: '',
-          eventListeners: [],
+          eventListeners: [], // line → string callbacks
+          subscribers: [],    // active res objects (for .end() on exit)
           finalEvents: null,
         });
 
+        let lineBuf = '';
         child.stdout.on('data', (d) => {
           const r = activeRuns.get(runId);
           if (!r) return;
-          r.stdoutBuf = (r.stdoutBuf + d.toString('utf8')).slice(-1024 * 1024);
+          const text = d.toString('utf8');
+          r.stdoutBuf = (r.stdoutBuf + text).slice(-1024 * 1024);
+          lineBuf += text;
+          let nl;
+          while ((nl = lineBuf.indexOf('\n')) >= 0) {
+            const line = lineBuf.slice(0, nl).trim();
+            lineBuf = lineBuf.slice(nl + 1);
+            if (!line) continue;
+            for (const listener of r.eventListeners) listener(line);
+          }
+        });
+
+        child.on('exit', (code) => {
+          const r = activeRuns.get(runId);
+          if (!r) return;
+          r.status = 'ended';
+          r.exitCode = code;
+          r.endedAt = new Date().toISOString();
+          // Defer SSE close so any in-flight stdout 'data' events flush to subscribers first
+          setImmediate(() => {
+            for (const subscriber of r.subscribers || []) {
+              try { subscriber.end(); } catch {}
+            }
+          });
+          // Persistence happens in Task 9
         });
 
         return send(res, 200, { runId });
       }
-      // GET /api/runs/:id, GET /api/runs/:id/stream, POST /api/runs/:id/cancel — Tasks 7-9
+      if (method === 'GET' && url.match(/^\/api\/runs\/[^/]+\/stream$/)) {
+        const runId = url.split('/')[3];
+        const r = activeRuns.get(runId);
+        if (!r) return send(res, 404, { error: 'not found' });
+
+        res.writeHead(200, {
+          'content-type': 'text/event-stream',
+          'cache-control': 'no-cache',
+          'connection': 'keep-alive',
+          'x-accel-buffering': 'no',
+        });
+        res.flushHeaders();
+
+        for (const line of r.stdoutBuf.split('\n')) {
+          if (line.trim()) res.write(`data: ${line.trim()}\n\n`);
+        }
+
+        const listener = (line) => res.write(`data: ${line}\n\n`);
+        r.eventListeners.push(listener);
+        r.subscribers.push(res);
+
+        req.on('close', () => {
+          const cur = activeRuns.get(runId);
+          if (!cur) return;
+          cur.eventListeners = cur.eventListeners.filter(l => l !== listener);
+          cur.subscribers = cur.subscribers.filter(s => s !== res);
+        });
+
+        if (r.status === 'ended') res.end();
+        return;
+      }
+      // GET /api/runs/:id, POST /api/runs/:id/cancel — Tasks 8-9
       return serveStatic(req, res, publicDir);
     } catch (err) {
       send(res, 500, { error: err.message });

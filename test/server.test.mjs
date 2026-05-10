@@ -73,6 +73,50 @@ test('GET /unknown serves index.html (SPA fallback)', async () => {
   assert.ok([200, 404].includes(r.status));
 });
 
+test('GET /api/runs/:id/stream forwards stdout as SSE', async () => {
+  let pendingChild;
+  await new Promise((res) => app.server.close(res));
+  app = await createApp({
+    projectDir,
+    dataDir: await mkdtemp(join(tmpdir(), 'agentic-server-data-')),
+    userSkillsDir: '/no',
+    statsCachePath: '/no',
+    spawnRun: () => { pendingChild = fakeChild(); return { child: pendingChild }; },
+  });
+  await new Promise((res) => app.server.listen(0, res));
+  address = `http://localhost:${app.server.address().port}`;
+
+  const startRes = await fetch(`${address}/api/run`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ skillId: 'project/project-foo', prompt: '/p' }),
+  });
+  const { runId } = await startRes.json();
+
+  const streamRes = await fetch(`${address}/api/runs/${runId}/stream`);
+  assert.equal(streamRes.status, 200);
+  assert.equal(streamRes.headers.get('content-type'), 'text/event-stream');
+
+  pendingChild.stdout.push('{"type":"system","subtype":"init"}\n');
+  pendingChild.stdout.push('{"type":"result","subtype":"success","exit_code":0}\n');
+  // Let the 'data' events flush through Node's stream machinery before exit
+  await new Promise(r => setImmediate(r));
+  await new Promise(r => setImmediate(r));
+  pendingChild.emit('exit', 0);
+
+  const reader = streamRes.body.getReader();
+  const decoder = new TextDecoder();
+  let received = '';
+  for (let i = 0; i < 5; i++) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    received += decoder.decode(value);
+    if (received.includes('"result"')) break;
+  }
+  assert.match(received, /data: \{"type":"system"/);
+  assert.match(received, /data: \{"type":"result"/);
+});
+
 test('POST /api/run returns runId, child spawned via factory', async () => {
   const calls = [];
   await new Promise((res) => app.server.close(res));
