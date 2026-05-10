@@ -239,6 +239,8 @@
       loadHistory(); // added in Task 11; safe no-op until then
     }
 
+    const pendingTools = new Map(); // tool_use_id → DOM details element
+
     function renderEvent(event, container) {
       if (event.type === 'system') {
         appendBlock(container, `--- ${event.subtype || 'system'} ---\n`, 'text-zinc-500');
@@ -253,14 +255,56 @@
         for (const block of event.message.content) {
           if (block.type === 'text') {
             appendBlock(container, block.text, 'text-zinc-100');
+          } else if (block.type === 'tool_use') {
+            const det = document.createElement('details');
+            det.className = 'my-1 ml-2 border-l-2 border-zinc-800 pl-2';
+            const summary = document.createElement('summary');
+            summary.className = 'text-amber-400 cursor-pointer text-xs';
+            summary.textContent = `▸ ${block.name}(${summarizeInput(block.input)})`;
+            det.appendChild(summary);
+            const inputBlock = document.createElement('pre');
+            inputBlock.className = 'text-xs text-zinc-500 mt-1';
+            inputBlock.textContent = JSON.stringify(block.input, null, 2);
+            det.appendChild(inputBlock);
+            const resultPlaceholder = document.createElement('pre');
+            resultPlaceholder.className = 'text-xs text-zinc-400 mt-1 hidden';
+            det.appendChild(resultPlaceholder);
+            pendingTools.set(block.id, resultPlaceholder);
+            container.appendChild(det);
           }
-          // tool_use handled in Task 9
         }
+        container.scrollTop = container.scrollHeight;
         return;
       }
-      // user / tool_result handled in Task 9
-      // fallthrough: render unknown events as raw JSON
+      if (event.type === 'user' && event.message?.content) {
+        for (const block of event.message.content) {
+          if (block.type === 'tool_result') {
+            const target = pendingTools.get(block.tool_use_id);
+            if (target) {
+              const text = typeof block.content === 'string' ? block.content : JSON.stringify(block.content);
+              target.textContent = text.length > 400 ? text.slice(0, 400) + '\n... (truncated)' : text;
+              target.classList.remove('hidden');
+              pendingTools.delete(block.tool_use_id);
+            }
+          }
+        }
+        container.scrollTop = container.scrollHeight;
+        return;
+      }
       appendBlock(container, `[unknown event: ${event.type}]\n`, 'text-zinc-600');
+    }
+
+    function summarizeInput(input) {
+      if (!input || typeof input !== 'object') return '';
+      // Show one notable key for brevity, e.g. file_path / command / pattern
+      for (const k of ['file_path', 'command', 'pattern', 'url']) {
+        if (input[k]) {
+          const v = String(input[k]);
+          return `${k}: ${v.length > 40 ? v.slice(0, 40) + '...' : v}`;
+        }
+      }
+      const k = Object.keys(input)[0];
+      return k ? `${k}: ...` : '';
     }
 
     function appendBlock(container, text, klass = '') {
