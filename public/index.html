@@ -4,68 +4,470 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Agentic OS</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400&family=JetBrains+Mono:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
       darkMode: 'class',
       theme: {
-        fontFamily: {
-          sans: ['ui-sans-serif', 'system-ui', '-apple-system', 'Segoe UI', 'Roboto', 'sans-serif'],
-          mono: ['ui-monospace', 'SFMono-Regular', 'Menlo', 'Consolas', 'monospace'],
+        extend: {
+          fontFamily: {
+            display: ['Fraunces', 'ui-serif', 'Georgia', 'serif'],
+            mono: ['"JetBrains Mono"', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'Consolas', 'monospace'],
+          },
+          colors: {
+            bg: {
+              DEFAULT: '#0a0d12',
+              elev: '#11151c',
+              hover: '#171c26',
+            },
+            ink: {
+              DEFAULT: '#e7e9ee',
+              dim: '#8b91a0',
+              mute: '#525968',
+              ghost: '#363c49',
+            },
+            edge: {
+              DEFAULT: '#1c2230',
+              strong: '#2c3445',
+            },
+            accent: {
+              DEFAULT: '#e8a23a',
+              dim: '#a47323',
+            },
+            phosphor: '#4ade80',
+            sig: {
+              ok: '#4ade80',
+              warn: '#e8a23a',
+              err: '#f87171',
+              cancel: '#6b7280',
+            },
+          },
         },
       },
     };
   </script>
+
+  <style>
+    :root {
+      --bg: #0a0d12;
+      --bg-elev: #11151c;
+      --bg-hover: #171c26;
+      --ink: #e7e9ee;
+      --ink-dim: #8b91a0;
+      --ink-mute: #525968;
+      --ink-ghost: #363c49;
+      --edge: #1c2230;
+      --edge-strong: #2c3445;
+      --accent: #e8a23a;
+      --accent-glow: rgba(232, 162, 58, 0.14);
+      --phosphor: #4ade80;
+      --phosphor-glow: rgba(74, 222, 128, 0.14);
+      --err: #f87171;
+    }
+
+    html, body {
+      font-feature-settings: "ss01", "cv11", "calt";
+      font-variant-numeric: tabular-nums;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+
+    /* Atmospheric film-grain overlay — gives the dark background a subtle living texture
+       instead of the flat-zinc-950 default. SVG noise is cheap, no images. */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0.035;
+      z-index: 1;
+      background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 1 0'/></filter><rect width='100%' height='100%' filter='url(%23n)' /></svg>");
+      mix-blend-mode: overlay;
+    }
+    /* The grid sits above the grain. */
+    body > div { position: relative; z-index: 2; }
+
+    /* Refined scrollbars — thin, themed, not the OS default. */
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb {
+      background: var(--edge-strong);
+      border-radius: 0;
+    }
+    ::-webkit-scrollbar-thumb:hover { background: var(--ink-mute); }
+    * { scrollbar-color: var(--edge-strong) transparent; scrollbar-width: thin; }
+
+    /* Selection color — subtle amber instead of OS blue. */
+    ::selection { background: var(--accent-glow); color: var(--ink); }
+
+    /* Focus rings — sharp 1px amber instead of generic blue blur. */
+    :focus-visible {
+      outline: 1px solid var(--accent);
+      outline-offset: 2px;
+      border-radius: 0;
+    }
+
+    /* Keyframes */
+    @keyframes pulse-accent {
+      0%, 100% { box-shadow: 0 0 0 0 var(--accent-glow); }
+      50% { box-shadow: 0 0 0 4px transparent; }
+    }
+    @keyframes fade-up {
+      from { opacity: 0; transform: translateY(2px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes blink-cursor {
+      0%, 50% { opacity: 1; }
+      51%, 100% { opacity: 0; }
+    }
+
+    /* Page-load stagger for skill domain groups — subtle, not bouncy. */
+    #skill-list > details {
+      animation: fade-up 240ms ease-out backwards;
+      animation-delay: calc(var(--stagger, 0) * 22ms);
+    }
+
+    /* Active-run status dot — pulses amber when something is running. */
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 999px;
+      background: var(--ink-ghost);
+      flex-shrink: 0;
+      transition: background-color 200ms;
+    }
+    .status-dot.is-running {
+      background: var(--accent);
+      animation: pulse-accent 1.6s ease-in-out infinite;
+      border-radius: 999px;
+    }
+    .status-dot.is-ok { background: var(--phosphor); }
+    .status-dot.is-err { background: var(--err); }
+    .status-dot.is-cancel { background: var(--ink-mute); }
+
+    /* Decorative blinking caret used in the empty-state of the run pane. */
+    .caret::after {
+      content: '_';
+      animation: blink-cursor 1.1s steps(2) infinite;
+      color: var(--accent);
+    }
+
+    /* Display labels — small-caps tracking-wide for section headers and
+       source-tag chips. Editorial / instrumental feel. */
+    .label {
+      font-family: 'Fraunces', serif;
+      font-weight: 500;
+      font-size: 10px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: var(--ink-mute);
+      font-feature-settings: "smcp";
+    }
+
+    /* Skill domain summary triangle — replace browser default with custom marker. */
+    details > summary { list-style: none; }
+    details > summary::-webkit-details-marker { display: none; }
+
+    /* Force sharp corners + considered borders across the app — Tailwind defaults
+       can drift toward soft "designy" rounding which fights the operator vibe. */
+    .panel { background: var(--bg-elev); border: 1px solid var(--edge); }
+    .panel-soft { background: rgba(255, 255, 255, 0.012); }
+
+    /* Buttons */
+    .btn {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      letter-spacing: 0.04em;
+      padding: 6px 12px;
+      border: 1px solid var(--edge-strong);
+      background: var(--bg-elev);
+      color: var(--ink);
+      cursor: pointer;
+      transition: all 120ms;
+    }
+    .btn:hover { background: var(--bg-hover); border-color: var(--ink-mute); }
+    .btn-primary { border-color: var(--accent); color: var(--accent); background: transparent; }
+    .btn-primary:hover { background: var(--accent-glow); border-color: var(--accent); color: var(--accent); }
+    .btn-danger { border-color: var(--err); color: var(--err); background: transparent; }
+    .btn-danger:hover { background: rgba(248, 113, 113, 0.1); }
+
+    /* Skill cards. */
+    .skill-card {
+      width: 100%;
+      text-align: left;
+      padding: 8px 10px;
+      border: 1px solid transparent;
+      border-left: 1px solid transparent;
+      background: transparent;
+      transition: all 120ms;
+      cursor: pointer;
+      display: block;
+    }
+    .skill-card:hover {
+      background: var(--bg-elev);
+      border-left-color: var(--accent);
+    }
+    .skill-card.is-active {
+      background: var(--bg-elev);
+      border-left-color: var(--accent);
+    }
+    .skill-card .name {
+      font-family: 'JetBrains Mono', monospace;
+      font-weight: 500;
+      font-size: 13px;
+      color: var(--ink);
+      letter-spacing: -0.01em;
+    }
+    .skill-card .desc {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 11px;
+      color: var(--ink-dim);
+      line-height: 1.45;
+      margin-top: 2px;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .skill-card .meta {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      color: var(--ink-mute);
+      margin-top: 4px;
+      letter-spacing: 0.02em;
+    }
+
+    /* History items. */
+    .history-item {
+      width: 100%;
+      text-align: left;
+      padding: 8px 10px;
+      background: transparent;
+      border: 1px solid transparent;
+      border-left: 1px solid transparent;
+      cursor: pointer;
+      transition: all 120ms;
+      display: block;
+    }
+    .history-item:hover { background: var(--bg-elev); }
+    .history-item .row { display: flex; align-items: center; gap: 8px; }
+    .history-item .name {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      color: var(--ink);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .history-item .time {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      color: var(--ink-mute);
+      margin-left: 15px;
+      margin-top: 2px;
+      letter-spacing: 0.02em;
+    }
+
+    /* Domain group summary. */
+    .domain-summary {
+      cursor: pointer;
+      padding: 6px 0 4px;
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+    }
+    .domain-summary .marker {
+      color: var(--ink-ghost);
+      transition: transform 160ms, color 160ms;
+      font-size: 8px;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    details[open] > .domain-summary .marker { transform: rotate(0deg); color: var(--ink-mute); }
+    .domain-summary .count {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 10px;
+      color: var(--ink-ghost);
+      letter-spacing: 0.04em;
+    }
+
+    /* Search input. */
+    .search-input {
+      width: 100%;
+      background: transparent;
+      border: 0;
+      border-bottom: 1px solid var(--edge);
+      padding: 6px 0;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      color: var(--ink);
+      transition: border-color 120ms;
+    }
+    .search-input::placeholder { color: var(--ink-mute); }
+    .search-input:focus { outline: none; border-bottom-color: var(--accent); }
+
+    /* Prompt textarea. */
+    .prompt-input {
+      width: 100%;
+      background: var(--bg-elev);
+      border: 1px solid var(--edge);
+      border-left-width: 2px;
+      border-left-color: var(--edge-strong);
+      padding: 10px 12px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 13px;
+      color: var(--ink);
+      resize: vertical;
+      transition: border-color 120ms;
+    }
+    .prompt-input:focus { outline: none; border-color: var(--edge-strong); border-left-color: var(--accent); }
+    .prompt-input[readonly] { color: var(--ink-dim); cursor: not-allowed; }
+
+    /* Transcript box. */
+    .transcript {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12.5px;
+      line-height: 1.55;
+      color: var(--ink);
+      background: rgba(0, 0, 0, 0.32);
+      border: 1px solid var(--edge);
+      border-left: 2px solid var(--edge-strong);
+      padding: 14px 16px;
+      min-height: 140px;
+      white-space: pre-wrap;
+      overflow-y: auto;
+      max-height: calc(100vh - 360px);
+    }
+    .transcript .system { color: var(--ink-mute); font-style: italic; }
+    .transcript .system .label-text {
+      font-family: 'Fraunces', serif;
+      font-style: italic;
+      font-weight: 400;
+      letter-spacing: 0.02em;
+    }
+    .transcript .text { color: var(--ink); }
+    .transcript .result-ok {
+      color: var(--phosphor);
+      border-top: 1px dashed var(--edge);
+      display: block;
+      padding-top: 8px;
+      margin-top: 12px;
+    }
+    .transcript .result-err { color: var(--err); }
+    .transcript .result-cancel { color: var(--ink-mute); }
+    .transcript .unknown { color: var(--ink-ghost); }
+
+    .tool-call {
+      margin: 4px 0 4px 6px;
+      border-left: 1px solid var(--edge);
+      padding-left: 10px;
+    }
+    .tool-call > summary {
+      color: var(--accent);
+      cursor: pointer;
+      font-size: 12px;
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+    }
+    .tool-call > summary .arrow { color: var(--ink-ghost); }
+    .tool-call > summary .tool-name { font-weight: 500; }
+    .tool-call > summary .tool-args { color: var(--ink-dim); font-size: 11px; }
+    .tool-call .tool-input {
+      font-size: 11px;
+      color: var(--ink-mute);
+      margin: 6px 0 0;
+      padding-left: 14px;
+      border-left: 1px solid var(--edge);
+    }
+    .tool-call .tool-result {
+      font-size: 11px;
+      color: var(--ink-dim);
+      margin: 4px 0 0;
+      padding-left: 14px;
+      border-left: 1px solid var(--phosphor);
+    }
+  </style>
 </head>
-<body class="bg-zinc-950 text-zinc-100 font-sans h-screen overflow-hidden">
-  <div class="grid h-screen" style="grid-template-rows: auto 1fr auto; grid-template-columns: 280px 1fr 320px;">
-    <!-- Top bar -->
-    <header id="topbar" class="col-span-3 border-b border-zinc-800 px-4 py-2 flex items-center justify-between text-sm">
-      <div id="project-name" class="font-mono text-zinc-300">agentic-os</div>
+<body class="bg-bg text-ink font-mono h-screen overflow-hidden">
+  <div class="grid h-screen" style="grid-template-rows: auto 1fr auto; grid-template-columns: 296px 1fr 320px;">
+
+    <!-- TOP BAR -->
+    <header id="topbar" class="col-span-3 flex items-center justify-between px-5 h-12 border-b border-edge">
       <div class="flex items-center gap-3">
-        <div id="usage" class="text-zinc-400">Usage: —</div>
-        <button id="refresh-btn" class="rounded border border-zinc-700 px-2 py-1 hover:bg-zinc-900">Refresh</button>
+        <span id="run-status-dot" class="status-dot" title="Idle"></span>
+        <span id="project-name" class="text-ink"
+              style="font-family:'Fraunces',serif;font-weight:500;font-size:18px;letter-spacing:-0.01em;">agentic-os</span>
+        <span class="label" style="color:var(--ink-ghost);">/ command bridge</span>
+      </div>
+      <div class="flex items-center gap-4 text-[11px]" style="color:var(--ink-dim);font-family:'JetBrains Mono',monospace;">
+        <div id="usage"></div>
+        <button id="refresh-btn" class="btn">↻ refresh</button>
       </div>
     </header>
 
-    <!-- Left pane: Skills -->
-    <aside id="skills-pane" class="border-r border-zinc-800 overflow-y-auto p-3">
-      <div class="text-xs uppercase tracking-wider text-zinc-500 mb-2">Skills</div>
-      <input id="skill-search" type="search" placeholder="Search skills..."
-             class="w-full bg-zinc-900 border border-zinc-800 rounded px-2 py-1 text-sm mb-3" />
-      <div id="skill-list"><!-- populated in Task 4 --></div>
+    <!-- LEFT PANE: SKILLS -->
+    <aside id="skills-pane" class="overflow-y-auto px-3 pt-4 pb-6 border-r border-edge">
+      <div class="flex items-baseline justify-between px-1 mb-3">
+        <span class="label">Skills</span>
+        <span id="skill-count" class="text-[10px]" style="color:var(--ink-ghost);font-family:'JetBrains Mono',monospace;letter-spacing:0.04em;"></span>
+      </div>
+      <div class="px-1 mb-4">
+        <input id="skill-search" type="search" placeholder="filter…" class="search-input" />
+      </div>
+      <div id="skill-list" class="px-1"><!-- populated by JS --></div>
     </aside>
 
-    <!-- Center pane: Run -->
-    <main id="run-pane" class="overflow-y-auto p-4">
-      <div id="run-empty" class="text-zinc-500 text-sm">Pick a skill to begin.</div>
-      <div id="run-active" class="hidden space-y-4">
-        <div>
-          <div class="flex items-baseline justify-between">
-            <h2 id="run-skill-name" class="text-lg font-mono"></h2>
-            <span id="run-skill-source" class="text-[10px] uppercase tracking-wider text-zinc-500"></span>
+    <!-- CENTER PANE: RUN -->
+    <main id="run-pane" class="overflow-y-auto px-8 py-8">
+      <div id="run-empty" class="select-none">
+        <div class="label mb-3">Standby</div>
+        <p style="font-family:'Fraunces',serif;font-size:32px;font-weight:300;line-height:1.15;letter-spacing:-0.02em;color:var(--ink);max-width:440px;">
+          Pick a skill from the bridge to begin.<span class="caret"></span>
+        </p>
+        <p class="mt-4 text-[12px]" style="color:var(--ink-dim);max-width:440px;line-height:1.55;">
+          Each skill spawns its own <span style="color:var(--accent);">claude&nbsp;-p</span> child and streams events back here as they happen. Cancel anytime; transcripts persist to <span class="text-[11px]" style="color:var(--ink-mute);">data/runs/&lt;id&gt;.jsonl</span>.
+        </p>
+      </div>
+
+      <div id="run-active" class="hidden space-y-5">
+        <div class="flex items-baseline justify-between">
+          <div class="flex items-baseline gap-3">
+            <h2 id="run-skill-name" style="font-family:'JetBrains Mono',monospace;font-weight:600;font-size:18px;color:var(--ink);letter-spacing:-0.01em;"></h2>
+            <span id="run-skill-source" class="label" style="color:var(--ink-mute);"></span>
           </div>
-          <p id="run-skill-description" class="text-sm text-zinc-400"></p>
+          <span id="run-state-tag" class="label" style="color:var(--ink-ghost);"></span>
         </div>
-        <textarea id="run-prompt" rows="3"
-                  class="w-full bg-zinc-900 border border-zinc-800 rounded p-2 font-mono text-sm"></textarea>
+        <p id="run-skill-description" style="font-family:'JetBrains Mono',monospace;font-size:12.5px;color:var(--ink-dim);line-height:1.55;max-width:60ch;"></p>
+
+        <textarea id="run-prompt" rows="3" class="prompt-input"></textarea>
+
         <div class="flex gap-2">
-          <button id="run-submit" class="rounded bg-emerald-700 hover:bg-emerald-600 px-3 py-1 text-sm">Run</button>
-          <button id="run-stop" class="hidden rounded bg-rose-700 hover:bg-rose-600 px-3 py-1 text-sm">Stop</button>
+          <button id="run-submit" class="btn btn-primary">▶ run</button>
+          <button id="run-stop" class="btn btn-danger hidden">■ stop</button>
         </div>
-        <div id="run-transcript" class="font-mono text-sm border border-zinc-800 rounded p-3 whitespace-pre-wrap min-h-[100px] bg-black/40"></div>
+
+        <div id="run-transcript" class="transcript"></div>
       </div>
     </main>
 
-    <!-- Right pane: History -->
-    <aside id="history-pane" class="border-l border-zinc-800 overflow-y-auto p-3">
-      <div class="text-xs uppercase tracking-wider text-zinc-500 mb-2">Run history</div>
-      <div id="history-list"><!-- populated in Task 11 --></div>
+    <!-- RIGHT PANE: HISTORY -->
+    <aside id="history-pane" class="overflow-y-auto px-3 pt-4 pb-6 border-l border-edge">
+      <div class="px-1 mb-3">
+        <span class="label">Run History</span>
+      </div>
+      <div id="history-list" class="px-1"><!-- populated by JS --></div>
     </aside>
 
-    <!-- Bottom bar -->
-    <footer id="vault-changes-bar" class="col-span-3 border-t border-zinc-800 px-4 py-2 text-xs text-zinc-400 font-mono overflow-x-auto whitespace-nowrap">
-      Recent vault changes: —
+    <!-- BOTTOM BAR -->
+    <footer id="vault-changes-bar" class="col-span-3 px-5 h-9 flex items-center text-[11px] border-t border-edge overflow-x-auto whitespace-nowrap"
+            style="color:var(--ink-mute);font-family:'JetBrains Mono',monospace;letter-spacing:0.02em;">
+      <span class="label mr-3" style="color:var(--ink-ghost);">vault</span>
+      <span id="vault-changes-text">—</span>
     </footer>
   </div>
 
@@ -79,7 +481,6 @@
     }
 
     async function loadProjectName() {
-      // For now, derive from URL or use static placeholder; real server will set it.
       $('#project-name').textContent = 'agentic-os';
     }
 
@@ -87,25 +488,22 @@
       try {
         const usage = await fetchJson('/api/usage');
         if (!usage) { $('#usage').textContent = ''; return; }
-        $('#usage').textContent = `Usage: 5h ${usage.fiveHourPercentUsed}% · 7d ${usage.weeklyPercentUsed}%`;
+        $('#usage').innerHTML = `<span style="color:var(--ink-ghost);">5h</span> ${usage.fiveHourPercentUsed}% &nbsp;·&nbsp; <span style="color:var(--ink-ghost);">7d</span> ${usage.weeklyPercentUsed}%`;
       } catch {
-        $('#usage').textContent = ''; // graceful skip
+        $('#usage').textContent = '';
       }
     }
 
     async function loadVaultChanges() {
       try {
         const changes = await fetchJson('/api/vault-changes');
-        if (!changes.length) {
-          $('#vault-changes-bar').textContent = 'Recent vault changes: (none)';
-          return;
-        }
-        const text = changes
-          .map(c => `${c.status} ${c.path}`)
-          .join('  ·  ');
-        $('#vault-changes-bar').textContent = `Recent vault changes:  ${text}`;
+        const target = $('#vault-changes-text');
+        if (!changes.length) { target.textContent = '(no changes in last 24h)'; return; }
+        target.innerHTML = changes
+          .map(c => `<span style="color:var(--ink-ghost);">${c.status}</span> ${c.path}`)
+          .join('<span style="color:var(--ink-ghost);"> · </span>');
       } catch {
-        $('#vault-changes-bar').textContent = ''; // hide on error
+        $('#vault-changes-text').textContent = '';
       }
     }
 
@@ -116,7 +514,7 @@
     function relativeTime(iso) {
       if (!iso) return 'never';
       const ms = Date.now() - new Date(iso).getTime();
-      if (ms < 0) return 'just now'; // clock skew or future-stub data
+      if (ms < 0) return 'just now';
       const s = Math.floor(ms / 1000);
       if (s < 60) return `${s}s ago`;
       if (s < 3600) return `${Math.floor(s/60)}m ago`;
@@ -124,51 +522,75 @@
       return `${Math.floor(s/86400)}d ago`;
     }
 
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
     function renderSkillCard(skill) {
       return `
-        <button class="skill-card w-full text-left rounded p-2 hover:bg-zinc-900 border border-transparent hover:border-zinc-800"
-                data-skill-id="${skill.id}">
-          <div class="font-mono text-sm text-zinc-200">${skill.name}</div>
-          <div class="text-xs text-zinc-500 line-clamp-2">${skill.description}</div>
-          <div class="text-[10px] text-zinc-600 mt-1">last run ${relativeTime(skill.lastRunAt)}</div>
+        <button class="skill-card" data-skill-id="${escapeHtml(skill.id)}">
+          <div class="name">${escapeHtml(skill.name)}</div>
+          <div class="desc">${escapeHtml(skill.description)}</div>
+          <div class="meta">↳ ${relativeTime(skill.lastRunAt)}</div>
         </button>
       `;
     }
 
-    function renderDomainGroup(domain, skills) {
-      const id = `domain-${domain}`;
+    function renderDomainGroup(domain, skills, idx) {
       return `
-        <details class="mb-3" open>
-          <summary class="text-xs uppercase tracking-wider text-zinc-500 cursor-pointer mb-1">${domain} (${skills.length})</summary>
-          <div class="space-y-1" id="${id}">
+        <details class="mb-2" open style="--stagger:${idx};">
+          <summary class="domain-summary">
+            <span class="marker">▾</span>
+            <span class="label" style="color:var(--ink-dim);font-size:10px;">${escapeHtml(domain)}</span>
+            <span class="count">${skills.length}</span>
+          </summary>
+          <div class="space-y-px mt-1">
             ${skills.sort((a,b) => a.name.localeCompare(b.name)).map(renderSkillCard).join('')}
           </div>
         </details>
       `;
     }
 
-    let allSkills = []; // module-scoped cache for filter
+    let allSkills = [];
 
     async function loadSkills() {
       allSkills = await fetchJson('/api/skills');
       renderSkills(allSkills);
+      $('#skill-count').textContent = `${allSkills.length} indexed`;
     }
 
     function renderSkills(skills) {
       const byDomain = {};
-      for (const s of skills) {
-        (byDomain[s.domain] ||= []).push(s);
-      }
-      $('#skill-list').innerHTML = Object.keys(byDomain).sort()
-        .map(d => renderDomainGroup(d, byDomain[d]))
+      for (const s of skills) (byDomain[s.domain] ||= []).push(s);
+      const domains = Object.keys(byDomain).sort();
+      $('#skill-list').innerHTML = domains
+        .map((d, i) => renderDomainGroup(d, byDomain[d], i))
         .join('');
     }
 
     $('#refresh-btn').addEventListener('click', async () => {
       bootBars();
-      await loadSkills(); // history depends on allSkills cache
+      await loadSkills();
       loadHistory();
     });
+
+    function setRunStateTag(text) {
+      $('#run-state-tag').textContent = text || '';
+    }
+    function setStatusDot(state) {
+      const dot = $('#run-status-dot');
+      dot.classList.remove('is-running', 'is-ok', 'is-err', 'is-cancel');
+      if (state) dot.classList.add(`is-${state}`);
+      dot.title = state ? state[0].toUpperCase() + state.slice(1) : 'Idle';
+    }
+
+    function setActiveSkillCard(skillId) {
+      document.querySelectorAll('.skill-card.is-active').forEach(el => el.classList.remove('is-active'));
+      const card = document.querySelector(`.skill-card[data-skill-id="${CSS.escape(skillId)}"]`);
+      if (card) card.classList.add('is-active');
+    }
 
     function openRunPane(skill) {
       $('#run-empty').classList.add('hidden');
@@ -181,6 +603,9 @@
       $('#run-transcript').textContent = '';
       $('#run-submit').classList.remove('hidden');
       $('#run-stop').classList.add('hidden');
+      setRunStateTag('Ready');
+      setStatusDot(null);
+      setActiveSkillCard(skill.id);
       $('#run-prompt').focus();
     }
 
@@ -202,7 +627,9 @@
 
       $('#run-submit').classList.add('hidden');
       $('#run-stop').classList.remove('hidden');
-      $('#run-transcript').textContent = ''; // clear
+      $('#run-transcript').textContent = '';
+      setRunStateTag('Running');
+      setStatusDot('running');
 
       const r = await fetch('/api/run', {
         method: 'POST',
@@ -231,18 +658,18 @@
       };
 
       currentEventSource.onerror = () => {
-        // SSE close fires onerror on natural end OR disconnect.
-        // Reset UI but DO NOT clear localStorage — a reload mid-stream
-        // should be able to reattach via Task 15's maybeReattach.
         currentEventSource.close();
         $('#run-submit').classList.remove('hidden');
         $('#run-stop').classList.add('hidden');
       };
     }
 
-    function onRunComplete() {
+    function onRunComplete(state) {
+      // state: 'ok' | 'err' | 'cancel' (visual only — defaults to 'ok')
       $('#run-submit').classList.remove('hidden');
       $('#run-stop').classList.add('hidden');
+      setRunStateTag(state === 'err' ? 'Error' : state === 'cancel' ? 'Cancelled' : 'Done');
+      setStatusDot(state || 'ok');
       loadHistory();
       loadVaultChanges();
       localStorage.removeItem('agentic-os.currentRunId');
@@ -251,36 +678,52 @@
       currentRunId = null;
     }
 
-    const pendingTools = new Map(); // tool_use_id → DOM details element
+    const pendingTools = new Map();
 
     function renderEvent(event, container) {
       if (event.type === 'system') {
-        appendBlock(container, `--- ${event.subtype || 'system'} ---\n`, 'text-zinc-500');
+        // Friendlier label for stderr / hooks vs init
+        const label = event.subtype || 'system';
+        const span = document.createElement('span');
+        span.className = 'system';
+        span.innerHTML = `── <span class="label-text">${escapeHtml(label)}</span> ──\n`;
+        container.appendChild(span);
+        container.scrollTop = container.scrollHeight;
         return;
       }
       if (event.type === 'result') {
-        appendBlock(container, `\n--- ${event.subtype || 'result'} (exit ${event.exit_code}) ---\n`, 'text-zinc-500');
-        onRunComplete();
+        // Claude's result event uses subtype: 'success' | 'error_*' etc.
+        // exit_code may or may not be present depending on version.
+        const subtype = event.subtype || 'result';
+        const isOk = subtype === 'success';
+        const isErr = subtype.startsWith('error');
+        const cls = isOk ? 'result-ok' : isErr ? 'result-err' : 'result-cancel';
+        const exitInfo = (event.exit_code != null) ? ` · exit ${event.exit_code}` : '';
+        const span = document.createElement('span');
+        span.className = cls;
+        span.innerHTML = `\n■ <span class="label-text">${escapeHtml(subtype)}</span>${escapeHtml(exitInfo)}`;
+        container.appendChild(span);
+        container.scrollTop = container.scrollHeight;
+        onRunComplete(isOk ? 'ok' : isErr ? 'err' : 'ok');
         return;
       }
       if (event.type === 'assistant' && event.message?.content) {
         for (const block of event.message.content) {
           if (block.type === 'text') {
-            appendBlock(container, block.text, 'text-zinc-100');
+            appendBlock(container, block.text, 'text');
           } else if (block.type === 'tool_use') {
             const det = document.createElement('details');
-            det.className = 'my-1 ml-2 border-l-2 border-zinc-800 pl-2';
-            const summary = document.createElement('summary');
-            summary.className = 'text-amber-400 cursor-pointer text-xs';
-            summary.textContent = `▸ ${block.name}(${summarizeInput(block.input)})`;
-            det.appendChild(summary);
-            const inputBlock = document.createElement('pre');
-            inputBlock.className = 'text-xs text-zinc-500 mt-1';
-            inputBlock.textContent = JSON.stringify(block.input, null, 2);
-            det.appendChild(inputBlock);
-            const resultPlaceholder = document.createElement('pre');
-            resultPlaceholder.className = 'text-xs text-zinc-400 mt-1 hidden';
-            det.appendChild(resultPlaceholder);
+            det.className = 'tool-call';
+            det.innerHTML = `
+              <summary>
+                <span class="arrow">▸</span>
+                <span class="tool-name">${escapeHtml(block.name)}</span>
+                <span class="tool-args">${escapeHtml(summarizeInput(block.input))}</span>
+              </summary>
+              <pre class="tool-input">${escapeHtml(JSON.stringify(block.input, null, 2))}</pre>
+              <pre class="tool-result hidden"></pre>
+            `;
+            const resultPlaceholder = det.querySelector('.tool-result');
             pendingTools.set(block.id, resultPlaceholder);
             container.appendChild(det);
           }
@@ -294,7 +737,7 @@
             const target = pendingTools.get(block.tool_use_id);
             if (target) {
               const text = typeof block.content === 'string' ? block.content : JSON.stringify(block.content);
-              target.textContent = text.length > 400 ? text.slice(0, 400) + '\n... (truncated)' : text;
+              target.textContent = text.length > 400 ? text.slice(0, 400) + '\n… (truncated)' : text;
               target.classList.remove('hidden');
               pendingTools.delete(block.tool_use_id);
             }
@@ -303,20 +746,23 @@
         container.scrollTop = container.scrollHeight;
         return;
       }
-      appendBlock(container, `[unknown event: ${event.type}]\n`, 'text-zinc-600');
+      // Unknown event types render as a faint dim line — graceful, not noisy.
+      const span = document.createElement('span');
+      span.className = 'unknown';
+      span.textContent = `· ${event.type}\n`;
+      container.appendChild(span);
     }
 
     function summarizeInput(input) {
       if (!input || typeof input !== 'object') return '';
-      // Show one notable key for brevity, e.g. file_path / command / pattern
       for (const k of ['file_path', 'command', 'pattern', 'url']) {
         if (input[k]) {
           const v = String(input[k]);
-          return `${k}: ${v.length > 40 ? v.slice(0, 40) + '...' : v}`;
+          return `${k}: ${v.length > 40 ? v.slice(0, 40) + '…' : v}`;
         }
       }
       const k = Object.keys(input)[0];
-      return k ? `${k}: ...` : '';
+      return k ? `${k}: …` : '';
     }
 
     function appendBlock(container, text, klass = '') {
@@ -327,30 +773,23 @@
       container.scrollTop = container.scrollHeight;
     }
 
-    function statusIcon(status, exitCode) {
-      if (status === 'cancelled') return '⊘';
-      if (exitCode === 0) return '✓';
-      if (exitCode != null) return '✗';
-      return '⟳';
-    }
-
-    function statusColor(status, exitCode) {
-      if (status === 'cancelled') return 'text-zinc-500';
-      if (exitCode === 0) return 'text-emerald-400';
-      if (exitCode != null) return 'text-rose-400';
-      return 'text-amber-400';
+    function statusGlyph(status, exitCode) {
+      if (status === 'cancelled') return { glyph: '⊘', color: 'var(--ink-mute)' };
+      if (exitCode === 0) return { glyph: '●', color: 'var(--phosphor)' };
+      if (exitCode != null) return { glyph: '●', color: 'var(--err)' };
+      return { glyph: '○', color: 'var(--accent)' };
     }
 
     function renderHistoryItem(run) {
       const skillName = (allSkills.find(s => s.id === run.skillId) || { name: run.skillId }).name;
+      const { glyph, color } = statusGlyph(run.status, run.exitCode);
       return `
-        <button class="history-item w-full text-left rounded p-2 hover:bg-zinc-900 text-xs"
-                data-run-id="${run.runId}">
-          <div class="flex items-center gap-2">
-            <span class="${statusColor(run.status, run.exitCode)}">${statusIcon(run.status, run.exitCode)}</span>
-            <span class="font-mono text-zinc-200 truncate">${skillName}</span>
+        <button class="history-item" data-run-id="${escapeHtml(run.runId)}">
+          <div class="row">
+            <span style="color:${color};font-size:9px;line-height:1;">${glyph}</span>
+            <span class="name">${escapeHtml(skillName)}</span>
           </div>
-          <div class="text-[10px] text-zinc-500 ml-5">${relativeTime(run.startedAt)}</div>
+          <div class="time">${relativeTime(run.startedAt)}</div>
         </button>
       `;
     }
@@ -358,9 +797,13 @@
     async function loadHistory() {
       try {
         const runs = await fetchJson('/api/runs?limit=50');
+        if (!runs.length) {
+          $('#history-list').innerHTML = `<div class="text-[11px] px-2" style="color:var(--ink-mute);">no runs yet</div>`;
+          return;
+        }
         $('#history-list').innerHTML = runs.map(renderHistoryItem).join('');
       } catch {
-        $('#history-list').innerHTML = '<div class="text-xs text-zinc-500">No history</div>';
+        $('#history-list').innerHTML = `<div class="text-[11px] px-2" style="color:var(--ink-mute);">history unavailable</div>`;
       }
     }
 
@@ -381,6 +824,10 @@
       $('#run-prompt').readOnly = true;
       $('#run-submit').classList.add('hidden');
       $('#run-stop').classList.add('hidden');
+      setRunStateTag('Replay');
+      const isOk = (data.status === 'ok' || data.exitCode === 0);
+      setStatusDot(data.status === 'cancelled' ? 'cancel' : (isOk ? 'ok' : 'err'));
+      setActiveSkillCard(skill.id);
 
       const transcript = $('#run-transcript');
       transcript.textContent = '';
@@ -392,6 +839,7 @@
       // Re-hide for past-run read-only view.
       $('#run-submit').classList.add('hidden');
       $('#run-stop').classList.add('hidden');
+      setRunStateTag('Replay');
     }
 
     document.addEventListener('click', (e) => {
@@ -402,12 +850,13 @@
 
     $('#run-stop').addEventListener('click', async () => {
       if (!currentRunId) return;
-      try {
-        await fetch(`/api/runs/${currentRunId}/cancel`, { method: 'POST' });
-      } catch {}
+      try { await fetch(`/api/runs/${currentRunId}/cancel`, { method: 'POST' }); } catch {}
       if (currentEventSource) currentEventSource.close();
-      appendBlock($('#run-transcript'), '\n--- cancelled ---\n', 'text-rose-400');
-      onRunComplete();
+      const span = document.createElement('span');
+      span.className = 'result-cancel';
+      span.innerHTML = `\n■ <span class="label-text">cancelled</span>`;
+      $('#run-transcript').appendChild(span);
+      onRunComplete('cancel');
     });
 
     $('#skill-search').addEventListener('input', (e) => {
@@ -435,13 +884,15 @@
       $('#run-prompt').value = prompt || `/${skill.name}`;
       $('#run-submit').classList.add('hidden');
       $('#run-stop').classList.remove('hidden');
+      setRunStateTag('Reattaching');
+      setStatusDot('running');
       currentRunId = runId;
       attachStream(runId);
     }
 
     (async () => {
       bootBars();
-      await loadSkills(); // history depends on allSkills cache
+      await loadSkills();
       loadHistory();
       maybeReattach();
     })();
