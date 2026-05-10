@@ -18,6 +18,9 @@ import {
   appendConversationEvent,
   readConversationTranscript,
   titleFromFirstMessage,
+  PERMISSION_MODES,
+  DEFAULT_PERMISSION_MODE,
+  normalizePermissionMode,
 } from './lib/conversations.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -292,14 +295,40 @@ export async function createApp(opts) {
       }
       if (method === 'POST' && url === '/api/conversations') {
         if (!spawnChat) return send(res, 500, { error: 'chat mode not configured' });
+        const body = await readBody(req);
+        let parsed = {};
+        try { parsed = body ? JSON.parse(body) : {}; } catch {}
         const conversationId = newConversationId();
         const createdAt = new Date().toISOString();
+        const permissionMode = normalizePermissionMode(parsed.permissionMode);
         await ensureConvDir(state.dataDir);
         await appendConversationIndex(state.dataDir, {
-          conversationId, title: 'New chat', createdAt, lastMessageAt: createdAt,
+          conversationId, title: 'New chat', createdAt, lastMessageAt: createdAt, permissionMode,
         });
         // Spawn lazily on first message — don't burn a child for an empty chat
-        return send(res, 200, { conversationId, title: 'New chat', createdAt });
+        return send(res, 200, { conversationId, title: 'New chat', createdAt, permissionMode });
+      }
+      if (method === 'PATCH' && url.match(/^\/api\/conversations\/[^/]+$/)) {
+        const id = url.split('/').pop();
+        const body = await readBody(req);
+        let parsed = {};
+        try { parsed = JSON.parse(body || '{}'); } catch { return send(res, 400, { error: 'invalid json' }); }
+        const idx = await readConversationIndex(state.dataDir);
+        const meta = idx.find(c => c.conversationId === id);
+        if (!meta) return send(res, 404, { error: 'not found' });
+        // Right now only permissionMode is patchable; changing it requires restarting
+        // any in-flight child so the new mode takes effect on the next turn.
+        if (parsed.permissionMode !== undefined) {
+          const next = normalizePermissionMode(parsed.permissionMode);
+          await appendConversationIndex(state.dataDir, { ...meta, permissionMode: next });
+          const conv = activeConversations.get(id);
+          if (conv) {
+            try { conv.child.kill('SIGTERM'); } catch {}
+            // exit handler clears from activeConversations; next message respawns with new mode
+          }
+          return send(res, 200, { conversationId: id, permissionMode: next });
+        }
+        return send(res, 400, { error: 'no patchable fields' });
       }
       if (method === 'GET' && url.match(/^\/api\/conversations\/[^/]+$/)) {
         const id = url.split('/').pop();
@@ -329,7 +358,12 @@ export async function createApp(opts) {
           const transcript = await readConversationTranscript(state.dataDir, id);
           const isResume = transcript.length > 0;
           const convDataDir = state.dataDir;
-          const { child } = spawnChat({ projectDir: state.projectDir, sessionId: id, resume: isResume });
+          const { child } = spawnChat({
+            projectDir: state.projectDir,
+            sessionId: id,
+            resume: isResume,
+            permissionMode: meta.permissionMode,
+          });
           conv = {
             child,
             dataDir: convDataDir,
@@ -497,14 +531,15 @@ function makeSpawnRun(claudePath) {
 // stream and doesn't need to splice.
 export function makeSpawnChat(claudePath) {
   const useShell = process.platform === 'win32';
-  return function spawnChat({ projectDir, sessionId, resume = false }) {
+  return function spawnChat({ projectDir, sessionId, resume = false, permissionMode = DEFAULT_PERMISSION_MODE }) {
     const args = [
       '-p',
       '--input-format', 'stream-json',
       '--output-format', 'stream-json',
       '--verbose',
       '--replay-user-messages',
-      '--permission-mode', 'bypassPermissions',
+      '--include-partial-messages', // emit stream_event lines with text deltas
+      '--permission-mode', normalizePermissionMode(permissionMode),
     ];
     if (resume) args.push('--resume', sessionId);
     else args.push('--session-id', sessionId);

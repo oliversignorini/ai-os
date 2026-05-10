@@ -539,6 +539,18 @@
       overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
     .conv-card .meta { font-size: 10px; color: var(--ink-ghost); }
+
+    /* Permission chip — shows current permission-mode for active conversation. */
+    .permission-chip {
+      font-family: 'JetBrains Mono', monospace; font-size: 10px;
+      letter-spacing: 0.06em; padding: 3px 8px; cursor: pointer;
+      background: transparent; border: 1px solid var(--edge-strong);
+      color: var(--ink-dim); transition: all 120ms ease;
+    }
+    .permission-chip:hover { border-color: var(--accent); color: var(--accent); }
+    .permission-chip[data-mode="bypassPermissions"] { color: var(--err); border-color: var(--err); }
+    .permission-chip[data-mode="bypassPermissions"]:hover { background: rgba(248,113,113,0.08); }
+    .permission-chip[data-mode="plan"] { color: var(--phosphor); border-color: var(--phosphor); }
   </style>
 </head>
 <body class="bg-bg text-ink font-mono h-screen overflow-hidden">
@@ -583,7 +595,10 @@
       <form id="composer" class="border-t border-edge px-6 py-4 flex flex-col gap-2 bg-bg">
         <textarea id="composer-input" rows="2" class="prompt-input" placeholder="Message Claude — / for skills" autocomplete="off"></textarea>
         <div class="flex items-center justify-between">
-          <span id="composer-status" class="label" style="color:var(--ink-ghost);">idle</span>
+          <div class="flex items-center gap-3">
+            <span id="composer-status" class="label" style="color:var(--ink-ghost);">idle</span>
+            <button type="button" id="permission-chip" class="permission-chip" title="Click to change permissions">acceptEdits</button>
+          </div>
           <div class="flex gap-2">
             <button type="button" id="chat-cancel" class="btn btn-danger hidden">■ stop</button>
             <button type="submit" id="composer-send" class="btn btn-primary">↵ send</button>
@@ -855,6 +870,19 @@
     let activeTabId = null;
     let currentChatES = null;
     const conversationsCache = new Map(); // conversationId → meta
+    const PERMISSION_CYCLE = ['acceptEdits', 'bypassPermissions', 'plan'];
+
+    function renderPermissionChip(mode) {
+      const chip = $('#permission-chip');
+      const m = mode || 'acceptEdits';
+      chip.textContent = m;
+      chip.dataset.mode = m;
+      chip.title = ({
+        acceptEdits: 'Auto-accepts file edits. Bash and other tools require setup. Click to cycle.',
+        bypassPermissions: 'DANGEROUS: auto-accepts everything. Click to cycle.',
+        plan: 'Read-only / planning mode. No edits will be made. Click to cycle.',
+      })[m] || 'Click to cycle permission modes';
+    }
 
     function saveTabs() {
       localStorage.setItem('agentic-os.openTabs', JSON.stringify(openTabs));
@@ -924,7 +952,8 @@
       try {
         const data = await fetchJson(`/api/conversations/${id}`);
         // Update cache with fresh meta
-        conversationsCache.set(id, { conversationId: id, title: data.title, createdAt: data.createdAt, lastMessageAt: data.lastMessageAt });
+        conversationsCache.set(id, { conversationId: id, title: data.title, createdAt: data.createdAt, lastMessageAt: data.lastMessageAt, permissionMode: data.permissionMode });
+        renderPermissionChip(data.permissionMode);
         for (const ev of data.transcript || []) renderChatEvent(ev, transcript);
         if (data.isActive) attachChatStream(id);
         setComposerStatus(data.isActive ? 'streaming…' : 'idle');
@@ -1036,29 +1065,113 @@
               pendingTools.delete(block.tool_use_id);
             }
           } else if (block.type === 'text') {
-            // Skip echoes — we already rendered the user message optimistically
-            // unless transcript replay (no optimistic), in which case render it.
-            const lastUser = container.querySelector('.chat-msg.user:last-of-type .body');
-            if (!lastUser || lastUser.textContent !== block.text) {
+            // Dedup against ANY existing user bubble (echo arrives mid-stream, so
+            // the optimistic bubble may not be the last child). Match by exact text.
+            const existing = Array.from(container.querySelectorAll('.chat-msg.user .body'))
+              .some(el => el.textContent === block.text);
+            if (!existing) {
               const div = document.createElement('div');
               div.className = 'chat-msg user';
               div.innerHTML = `<div class="role">you</div><div class="body">${escapeHtml(block.text)}</div>`;
-              container.appendChild(div);
+              // During replay, the user echo arrives AFTER claude's streamed reply.
+              // If the trailing assistant bubble has no preceding user bubble in
+              // this turn, insert the user before it so the visual order is right.
+              const trailingAssistant = container.querySelector('.chat-msg.assistant:last-of-type');
+              const lastUser = container.querySelector('.chat-msg.user:last-of-type');
+              const userIsBeforeAssistant = lastUser && trailingAssistant &&
+                (lastUser.compareDocumentPosition(trailingAssistant) & Node.DOCUMENT_POSITION_FOLLOWING);
+              if (trailingAssistant && !userIsBeforeAssistant) {
+                container.insertBefore(div, trailingAssistant);
+              } else {
+                container.appendChild(div);
+              }
             }
           }
         }
         container.scrollTop = container.scrollHeight;
         return;
       }
-      if (event.type === 'assistant' && event.message?.content) {
-        // Group all blocks of one assistant turn into a single bubble
-        let bubble = container.querySelector('.chat-msg.assistant.streaming');
-        if (!bubble) {
-          bubble = document.createElement('div');
+      if (event.type === 'stream_event' && event.event) {
+        // Token-streaming events. We render text_delta into a streaming bubble
+        // and let the trailing full `assistant` event be skipped (already rendered).
+        const ev = event.event;
+        if (ev.type === 'message_start') {
+          // Fresh assistant turn starts here
+          const bubble = document.createElement('div');
           bubble.className = 'chat-msg assistant streaming';
           bubble.innerHTML = `<div class="role">claude</div><div class="body"></div>`;
           container.appendChild(bubble);
+          container.scrollTop = container.scrollHeight;
+        } else if (ev.type === 'content_block_start') {
+          const bubble = container.querySelector('.chat-msg.assistant.streaming');
+          if (!bubble) return;
+          const body = bubble.querySelector('.body');
+          if (ev.content_block?.type === 'tool_use') {
+            // Tool call started; render the open card now, fill input as deltas arrive
+            const det = document.createElement('details');
+            det.className = 'tool-call';
+            det.dataset.toolIdx = String(ev.index);
+            det.innerHTML = `
+              <summary>
+                <span class="arrow">▸</span>
+                <span class="tool-name">${escapeHtml(ev.content_block.name)}</span>
+                <span class="tool-args"></span>
+              </summary>
+              <pre class="tool-input"></pre>
+              <pre class="tool-result hidden"></pre>
+            `;
+            const placeholder = det.querySelector('.tool-result');
+            pendingTools.set(ev.content_block.id, placeholder);
+            body.appendChild(det);
+          } else if (ev.content_block?.type === 'text') {
+            // Mark a span for this block — deltas append to it
+            const span = document.createElement('span');
+            span.dataset.blockIdx = String(ev.index);
+            body.appendChild(span);
+          }
+        } else if (ev.type === 'content_block_delta') {
+          const bubble = container.querySelector('.chat-msg.assistant.streaming');
+          if (!bubble) return;
+          if (ev.delta?.type === 'text_delta') {
+            const span = bubble.querySelector(`span[data-block-idx="${ev.index}"]`);
+            if (span) span.textContent += ev.delta.text;
+          }
+          // input_json_delta is partial JSON for tool args — we wait for the
+          // final assistant event for tool args (simpler than streaming JSON parse).
+          container.scrollTop = container.scrollHeight;
+        } else if (ev.type === 'message_stop') {
+          // Bubble is done streaming
+          container.querySelectorAll('.chat-msg.assistant.streaming').forEach(el => el.classList.remove('streaming'));
         }
+        return;
+      }
+      if (event.type === 'assistant' && event.message?.content) {
+        // The full assistant event arrives DURING (before message_stop) or
+        // AFTER the stream_event chain. If a streaming-OR-just-finalized
+        // bubble exists from this turn, treat the stream as authoritative
+        // for text and only backfill tool args from this event.
+        const bubbles = container.querySelectorAll('.chat-msg.assistant');
+        const lastBubble = bubbles[bubbles.length - 1];
+        const hasStreamedContent = lastBubble && lastBubble.querySelector('span[data-block-idx], .tool-call[data-tool-idx]');
+        if (hasStreamedContent) {
+          for (const block of event.message.content) {
+            if (block.type === 'tool_use') {
+              const det = lastBubble.querySelector(`.tool-call[data-tool-idx]:not(.is-finalized)`);
+              if (det) {
+                det.classList.add('is-finalized');
+                det.querySelector('.tool-args').textContent = summarizeInput(block.input);
+                det.querySelector('.tool-input').textContent = JSON.stringify(block.input, null, 2);
+              }
+            }
+          }
+          container.scrollTop = container.scrollHeight;
+          return;
+        }
+        // No streaming bubble (e.g. transcript replay without partials) — render fresh
+        const bubble = document.createElement('div');
+        bubble.className = 'chat-msg assistant';
+        bubble.innerHTML = `<div class="role">claude</div><div class="body"></div>`;
+        container.appendChild(bubble);
         const body = bubble.querySelector('.body');
         for (const block of event.message.content) {
           if (block.type === 'text') {
@@ -1067,7 +1180,7 @@
             body.appendChild(span);
           } else if (block.type === 'tool_use') {
             const det = document.createElement('details');
-            det.className = 'tool-call';
+            det.className = 'tool-call is-finalized';
             det.innerHTML = `
               <summary>
                 <span class="arrow">▸</span>
@@ -1172,6 +1285,22 @@
 
     $('#composer').addEventListener('submit', (e) => { e.preventDefault(); sendMessage(); });
     $('#new-chat-btn').addEventListener('click', newConversation);
+    $('#permission-chip').addEventListener('click', async () => {
+      if (!activeTabId) return;
+      const meta = conversationsCache.get(activeTabId) || {};
+      const cur = meta.permissionMode || 'acceptEdits';
+      const next = PERMISSION_CYCLE[(PERMISSION_CYCLE.indexOf(cur) + 1) % PERMISSION_CYCLE.length];
+      try {
+        const r = await fetch(`/api/conversations/${activeTabId}`, {
+          method: 'PATCH', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ permissionMode: next }),
+        });
+        if (r.ok) {
+          conversationsCache.set(activeTabId, { ...meta, permissionMode: next });
+          renderPermissionChip(next);
+        }
+      } catch {}
+    });
     $('#chat-cancel').addEventListener('click', async () => {
       if (!activeTabId) return;
       try { await fetch(`/api/conversations/${activeTabId}/cancel`, { method: 'POST' }); } catch {}

@@ -12,6 +12,9 @@ import {
   appendConversationEvent,
   readConversationTranscript,
   titleFromFirstMessage,
+  normalizePermissionMode,
+  PERMISSION_MODES,
+  DEFAULT_PERMISSION_MODE,
 } from '../lib/conversations.mjs';
 import { createApp } from '../server.mjs';
 
@@ -164,6 +167,82 @@ test('POST /message on second send to same conversation reuses existing child (n
 
   assert.equal(spawnCount, 1, 'should reuse the long-lived child');
   assert.equal(lastChild.stdinWrites.length, 2);
+
+  await new Promise(r => app.server.close(r));
+  await rm(projectDir, { recursive: true, force: true });
+  await rm(dataRoot, { recursive: true, force: true });
+});
+
+test('normalizePermissionMode returns default for invalid input', () => {
+  assert.equal(normalizePermissionMode('acceptEdits'), 'acceptEdits');
+  assert.equal(normalizePermissionMode('bypassPermissions'), 'bypassPermissions');
+  assert.equal(normalizePermissionMode('plan'), 'plan');
+  assert.equal(normalizePermissionMode('garbage'), DEFAULT_PERMISSION_MODE);
+  assert.equal(normalizePermissionMode(undefined), DEFAULT_PERMISSION_MODE);
+  assert.equal(normalizePermissionMode(null), DEFAULT_PERMISSION_MODE);
+  // Default must be the safer choice
+  assert.equal(DEFAULT_PERMISSION_MODE, 'acceptEdits');
+});
+
+test('POST /api/conversations defaults permissionMode and accepts override', async () => {
+  const projectDir = await mkdtemp(join(tmpdir(), 'pperm-'));
+  const dataRoot = await mkdtemp(join(tmpdir(), 'dperm-'));
+  const app = await createApp({
+    projectDir, dataDir: join(dataRoot, 'projects', 'x'), dataRoot,
+    userSkillsDir: '/no', pluginsDir: '/no', statsCachePath: '/no',
+    spawnRun: () => { throw new Error('unused'); },
+    spawnChat: () => ({ child: fakeChat() }),
+  });
+  await new Promise(r => app.server.listen(0, r));
+  const { port } = app.server.address();
+  const base = `http://localhost:${port}`;
+
+  // Default
+  let body = await (await fetch(`${base}/api/conversations`, { method: 'POST', body: '{}', headers: { 'content-type': 'application/json' } })).json();
+  assert.equal(body.permissionMode, 'acceptEdits');
+
+  // Explicit override
+  body = await (await fetch(`${base}/api/conversations`, { method: 'POST', body: JSON.stringify({ permissionMode: 'plan' }), headers: { 'content-type': 'application/json' } })).json();
+  assert.equal(body.permissionMode, 'plan');
+
+  // Garbage falls back to default
+  body = await (await fetch(`${base}/api/conversations`, { method: 'POST', body: JSON.stringify({ permissionMode: 'evil' }), headers: { 'content-type': 'application/json' } })).json();
+  assert.equal(body.permissionMode, 'acceptEdits');
+
+  await new Promise(r => app.server.close(r));
+  await rm(projectDir, { recursive: true, force: true });
+  await rm(dataRoot, { recursive: true, force: true });
+});
+
+test('PATCH /api/conversations/:id updates permissionMode and is forwarded to spawnChat', async () => {
+  const projectDir = await mkdtemp(join(tmpdir(), 'pperm2-'));
+  const dataRoot = await mkdtemp(join(tmpdir(), 'dperm2-'));
+  let lastSpawnMode = null;
+  const app = await createApp({
+    projectDir, dataDir: join(dataRoot, 'projects', 'x'), dataRoot,
+    userSkillsDir: '/no', pluginsDir: '/no', statsCachePath: '/no',
+    spawnRun: () => { throw new Error('unused'); },
+    spawnChat: (opts) => { lastSpawnMode = opts.permissionMode; return { child: fakeChat() }; },
+  });
+  await new Promise(r => app.server.listen(0, r));
+  const { port } = app.server.address();
+  const base = `http://localhost:${port}`;
+
+  const { conversationId } = await (await fetch(`${base}/api/conversations`, { method: 'POST', body: '{}', headers: { 'content-type': 'application/json' } })).json();
+
+  // PATCH to bypassPermissions
+  const patched = await (await fetch(`${base}/api/conversations/${conversationId}`, {
+    method: 'PATCH', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ permissionMode: 'bypassPermissions' }),
+  })).json();
+  assert.equal(patched.permissionMode, 'bypassPermissions');
+
+  // Send a message — spawnChat should now receive the new mode
+  await fetch(`${base}/api/conversations/${conversationId}/message`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text: 'hi' }),
+  });
+  assert.equal(lastSpawnMode, 'bypassPermissions');
 
   await new Promise(r => app.server.close(r));
   await rm(projectDir, { recursive: true, force: true });
