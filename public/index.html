@@ -237,7 +237,8 @@
     function onRunComplete() {
       $('#run-submit').classList.remove('hidden');
       $('#run-stop').classList.add('hidden');
-      loadHistory(); // added in Task 11; safe no-op until then
+      loadHistory();
+      loadVaultChanges();
     }
 
     const pendingTools = new Map(); // tool_use_id → DOM details element
