@@ -320,6 +320,16 @@
 
     $('#run-submit').addEventListener('click', startRun);
 
+    $('#run-stop').addEventListener('click', async () => {
+      if (!currentRunId) return;
+      try {
+        await fetch(`/api/runs/${currentRunId}/cancel`, { method: 'POST' });
+      } catch {}
+      if (currentEventSource) currentEventSource.close();
+      appendBlock($('#run-transcript'), '\n--- cancelled ---\n', 'text-rose-400');
+      onRunComplete();
+    });
+
     $('#skill-search').addEventListener('input', (e) => {
       const q = e.target.value.trim().toLowerCase();
       if (!q) { renderSkills(allSkills); return; }
