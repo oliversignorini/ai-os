@@ -355,6 +355,40 @@
 
     $('#run-submit').addEventListener('click', startRun);
 
+    async function openPastRun(runId) {
+      if (currentEventSource) currentEventSource.close();
+      const data = await fetchJson(`/api/runs/${runId}`);
+      const skill = allSkills.find(s => s.id === data.skillId)
+        || { name: data.skillId, source: '?', description: '(skill not found in registry)' };
+
+      $('#run-empty').classList.add('hidden');
+      $('#run-active').classList.remove('hidden');
+      $('#run-skill-name').textContent = skill.name;
+      $('#run-skill-source').textContent = skill.source;
+      $('#run-skill-description').textContent = skill.description;
+      $('#run-prompt').value = data.prompt;
+      $('#run-prompt').readOnly = true;
+      $('#run-submit').classList.add('hidden');
+      $('#run-stop').classList.add('hidden');
+
+      const transcript = $('#run-transcript');
+      transcript.textContent = '';
+      pendingTools.clear();
+      for (const event of (data.transcript || [])) {
+        renderEvent(event, transcript);
+      }
+      // renderEvent's `result` branch calls onRunComplete which un-hides Run.
+      // Re-hide for past-run read-only view.
+      $('#run-submit').classList.add('hidden');
+      $('#run-stop').classList.add('hidden');
+    }
+
+    document.addEventListener('click', (e) => {
+      const item = e.target.closest('.history-item');
+      if (!item) return;
+      openPastRun(item.dataset.runId);
+    });
+
     $('#run-stop').addEventListener('click', async () => {
       if (!currentRunId) return;
       try {
