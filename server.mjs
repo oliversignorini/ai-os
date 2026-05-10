@@ -5,7 +5,7 @@ import { join, extname, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
-import { scanSkillDirs } from './lib/skills.mjs';
+import { scanSkillDirs, scanPluginsDir } from './lib/skills.mjs';
 import { readRuns, appendRun, appendTranscriptEvent, readTranscript, lastRunAtBySkillId } from './lib/runs.mjs';
 import { vaultChanges } from './lib/vault-changes.mjs';
 import { readUsage } from './lib/usage.mjs';
@@ -49,7 +49,6 @@ export async function createApp(opts) {
   const skillSources = [
     { dir: userSkillsDir, source: 'user' },
     { dir: join(projectDir, '.claude', 'skills'), source: 'project' },
-    // Plugin-installed skill scanning is a v1.x improvement (deep glob into pluginsDir).
   ];
 
   const activeRuns = new Map(); // runId → { child, stdoutBuf, status, ... }
@@ -58,7 +57,11 @@ export async function createApp(opts) {
     try {
       const { method, url } = req;
       if (method === 'GET' && url === '/api/skills') {
-        const skills = await scanSkillDirs(skillSources);
+        const [user, plugins] = await Promise.all([
+          scanSkillDirs(skillSources),
+          scanPluginsDir(pluginsDir),
+        ]);
+        const skills = [...user, ...plugins];
         const lastRunAt = await lastRunAtBySkillId(dataDir);
         return send(res, 200, skills.map(s => ({ ...s, lastRunAt: lastRunAt[s.id] || null })));
       }
@@ -78,8 +81,11 @@ export async function createApp(opts) {
         const { skillId, prompt } = JSON.parse(body || '{}');
         if (!skillId || !prompt) return send(res, 400, { error: 'skillId and prompt required' });
 
-        const skills = await scanSkillDirs(skillSources);
-        const skill = skills.find(s => s.id === skillId);
+        const [user, plugins] = await Promise.all([
+          scanSkillDirs(skillSources),
+          scanPluginsDir(pluginsDir),
+        ]);
+        const skill = [...user, ...plugins].find(s => s.id === skillId);
         if (!skill) return send(res, 404, { error: 'skill not found' });
 
         const runId = 'r-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
