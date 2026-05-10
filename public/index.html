@@ -1561,7 +1561,15 @@
       if (skillMatch) {
         acMode = 'skill';
         const q = skillMatch[1].toLowerCase();
-        acMatches = allSkills.filter(s => s.name.toLowerCase().includes(q)).slice(0, 8);
+        // Rank: exact name > startsWith > word-boundary > contains. Then alpha.
+        // Show up to 50 — the dropdown scrolls (CSS max-height: 240px), so
+        // long lists are usable without dominating the viewport.
+        acMatches = allSkills
+          .map(s => ({ s, score: scoreSkill(s.name.toLowerCase(), q) }))
+          .filter(x => x.score > 0 || !q)
+          .sort((a, b) => b.score - a.score || a.s.name.localeCompare(b.s.name))
+          .slice(0, 50)
+          .map(x => x.s);
         if (!acMatches.length) { ac.classList.add('hidden'); return; }
         acIndex = 0;
         ac.innerHTML = acMatches.map((s, i) => `
@@ -1581,7 +1589,7 @@
         try {
           const files = await fetchJson(`/api/files?q=${encodeURIComponent(q)}`);
           if (token !== acFetchToken) return; // a newer query superseded us
-          acMatches = files.slice(0, 8).map(p => ({ name: p }));
+          acMatches = files.slice(0, 30).map(p => ({ name: p }));
           if (!acMatches.length) { ac.classList.add('hidden'); return; }
           acIndex = 0;
           ac.innerHTML = acMatches.map((f, i) => `
@@ -1600,6 +1608,20 @@
       acMatches = [];
       acMode = null;
     }
+
+    // Skill name relevance score. Higher = better match. 0 = no match.
+    // For empty queries we return 0 too, but the caller bypasses the filter
+    // and shows all skills sorted alphabetically (browse mode).
+    function scoreSkill(name, q) {
+      if (!q) return 0;
+      if (name === q) return 100;
+      if (name.startsWith(q)) return 60;
+      // Word-boundary hit (after : or -, common in domain:skill or kebab-case)
+      if (new RegExp(`(?:^|[:\\-])${escapeRegex(q)}`).test(name)) return 40;
+      if (name.includes(q)) return 15;
+      return 0;
+    }
+    function escapeRegex(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
     function applyAutocomplete(value) {
       const input = $('#composer-input');
