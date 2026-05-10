@@ -154,6 +154,15 @@
       loadSkills();
     });
 
+    $('#skill-search').addEventListener('input', (e) => {
+      const q = e.target.value.trim().toLowerCase();
+      if (!q) { renderSkills(allSkills); return; }
+      const filtered = allSkills.filter(s =>
+        s.name.toLowerCase().includes(q) || s.description.toLowerCase().includes(q)
+      );
+      renderSkills(filtered);
+    });
+
     bootBars();
     loadSkills();
   </script>
