@@ -4,3 +4,4 @@ node_modules/
 data/runs.jsonl
 data/runs/
 data/config.json
+data/projects/

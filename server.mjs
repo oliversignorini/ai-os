@@ -9,6 +9,7 @@ import { scanSkillDirs, scanPluginsDir } from './lib/skills.mjs';
 import { readRuns, appendRun, appendTranscriptEvent, readTranscript, lastRunAtBySkillId } from './lib/runs.mjs';
 import { vaultChanges } from './lib/vault-changes.mjs';
 import { readUsage } from './lib/usage.mjs';
+import { ensureProjectDataDir, readConfig, writeConfig, pushRecent, describeProject, migrateLegacyData } from './lib/project.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, 'public');
@@ -39,6 +40,7 @@ export async function createApp(opts) {
   const {
     projectDir,
     dataDir,
+    dataRoot,
     userSkillsDir = join(homedir(), '.claude', 'skills'),
     pluginsDir = join(homedir(), '.claude', 'plugins', 'cache'),
     statsCachePath = join(homedir(), '.claude', 'stats-cache.json'),
@@ -46,10 +48,16 @@ export async function createApp(opts) {
     spawnRun = defaultSpawnRun,
   } = opts;
 
-  const skillSources = [
-    { dir: userSkillsDir, source: 'user' },
-    { dir: join(projectDir, '.claude', 'skills'), source: 'project' },
-  ];
+  // Mutable so /api/project can swap projects at runtime. Handlers read from
+  // `state.*` (never the closure-captured opts above) so a switch takes effect
+  // for the very next request. In-flight runs capture their own dataDir at
+  // spawn time below — switching projects doesn't redirect their persistence.
+  const state = {
+    projectDir,
+    dataDir,
+    dataRoot: dataRoot || dirname(dataDir),
+    skillSources: buildSkillSources(projectDir, userSkillsDir),
+  };
 
   const activeRuns = new Map(); // runId → { child, stdoutBuf, status, ... }
 
@@ -58,23 +66,47 @@ export async function createApp(opts) {
       const { method, url } = req;
       if (method === 'GET' && url === '/api/skills') {
         const [user, plugins] = await Promise.all([
-          scanSkillDirs(skillSources),
+          scanSkillDirs(state.skillSources),
           scanPluginsDir(pluginsDir),
         ]);
         const skills = [...user, ...plugins];
-        const lastRunAt = await lastRunAtBySkillId(dataDir);
+        const lastRunAt = await lastRunAtBySkillId(state.dataDir);
         return send(res, 200, skills.map(s => ({ ...s, lastRunAt: lastRunAt[s.id] || null })));
       }
       if (method === 'GET' && url.startsWith('/api/runs') && !url.match(/^\/api\/runs\/[^/]+/)) {
         const u = new URL(url, 'http://localhost');
         const limit = Number(u.searchParams.get('limit')) || 50;
-        return send(res, 200, await readRuns(dataDir, limit));
+        return send(res, 200, await readRuns(state.dataDir, limit));
       }
       if (method === 'GET' && url === '/api/vault-changes') {
-        return send(res, 200, await vaultChanges(projectDir));
+        return send(res, 200, await vaultChanges(state.projectDir));
       }
       if (method === 'GET' && url === '/api/usage') {
         return send(res, 200, await readUsage(statsCachePath));
+      }
+      if (method === 'GET' && url === '/api/project') {
+        const cfg = await readConfig(state.dataRoot);
+        return send(res, 200, {
+          current: describeProject(state.projectDir),
+          recents: (cfg.recentProjects || []).map(describeProject),
+        });
+      }
+      if (method === 'POST' && url === '/api/project') {
+        const body = await readBody(req);
+        let parsed;
+        try { parsed = JSON.parse(body || '{}'); } catch { return send(res, 400, { error: 'invalid json' }); }
+        const requested = parsed.path && resolve(parsed.path);
+        if (!requested) return send(res, 400, { error: 'path required' });
+        if (!existsSync(requested)) return send(res, 400, { error: 'path does not exist' });
+        state.projectDir = requested;
+        state.dataDir = await ensureProjectDataDir(state.dataRoot, requested);
+        state.skillSources = buildSkillSources(requested, userSkillsDir);
+        const cfg = await readConfig(state.dataRoot);
+        await writeConfig(state.dataRoot, {
+          lastProject: requested,
+          recentProjects: pushRecent(cfg.recentProjects, requested),
+        });
+        return send(res, 200, { current: describeProject(requested) });
       }
       if (method === 'POST' && url === '/api/run') {
         const body = await readBody(req);
@@ -82,7 +114,7 @@ export async function createApp(opts) {
         if (!skillId || !prompt) return send(res, 400, { error: 'skillId and prompt required' });
 
         const [user, plugins] = await Promise.all([
-          scanSkillDirs(skillSources),
+          scanSkillDirs(state.skillSources),
           scanPluginsDir(pluginsDir),
         ]);
         const skill = [...user, ...plugins].find(s => s.id === skillId);
@@ -90,7 +122,9 @@ export async function createApp(opts) {
 
         const runId = 'r-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
         const startedAt = new Date().toISOString();
-        const { child } = spawnRun({ skillName: skill.name, prompt, projectDir });
+        // Capture so a project switch mid-run doesn't redirect this run's writes
+        const runDataDir = state.dataDir;
+        const { child } = spawnRun({ skillName: skill.name, prompt, projectDir: state.projectDir });
 
         // Critical: catch spawn errors so a bad `claude` path / missing binary
         // doesn't crash the whole server with an unhandled 'error' event.
@@ -106,8 +140,8 @@ export async function createApp(opts) {
           for (const subscriber of r.subscribers || []) {
             try { subscriber.end(); } catch {}
           }
-          r.writeChain = r.writeChain.then(() => appendTranscriptEvent(dataDir, runId, JSON.parse(errLine))).catch(() => {});
-          r.writeChain.then(() => appendRun(dataDir, {
+          r.writeChain = r.writeChain.then(() => appendTranscriptEvent(runDataDir, runId, JSON.parse(errLine))).catch(() => {});
+          r.writeChain.then(() => appendRun(runDataDir, {
             runId, skillId: r.skillId, prompt: r.prompt,
             startedAt: r.startedAt, endedAt: r.endedAt,
             exitCode: -1, status: 'error',
@@ -141,7 +175,7 @@ export async function createApp(opts) {
             // Persist each event to the per-run transcript file (serialized per run)
             let parsed;
             try { parsed = JSON.parse(line); } catch { continue; }
-            r.writeChain = r.writeChain.then(() => appendTranscriptEvent(dataDir, runId, parsed)).catch(() => {});
+            r.writeChain = r.writeChain.then(() => appendTranscriptEvent(runDataDir, runId, parsed)).catch(() => {});
           }
         });
 
@@ -153,7 +187,7 @@ export async function createApp(opts) {
           if (!r) return;
           const errLine = JSON.stringify({ type: 'system', subtype: 'stderr', text: d.toString('utf8') });
           for (const listener of r.eventListeners) listener(errLine);
-          r.writeChain = r.writeChain.then(() => appendTranscriptEvent(dataDir, runId, JSON.parse(errLine))).catch(() => {});
+          r.writeChain = r.writeChain.then(() => appendTranscriptEvent(runDataDir, runId, JSON.parse(errLine))).catch(() => {});
         });
 
         child.on('exit', async (code) => {
@@ -170,7 +204,7 @@ export async function createApp(opts) {
           });
           // Wait for any pending transcript writes before recording the run
           await r.writeChain.catch(() => {});
-          await appendRun(dataDir, {
+          await appendRun(runDataDir, {
             runId, skillId: r.skillId, prompt: r.prompt,
             startedAt: r.startedAt, endedAt: r.endedAt,
             exitCode: code, status: r.status,
@@ -216,7 +250,7 @@ export async function createApp(opts) {
         const runId = url.split('/').pop();
         const active = activeRuns.get(runId);
         if (active) {
-          const transcript = await readTranscript(dataDir, runId);
+          const transcript = await readTranscript(state.dataDir, runId);
           return send(res, 200, {
             runId, skillId: active.skillId, prompt: active.prompt,
             startedAt: active.startedAt, endedAt: active.endedAt || null,
@@ -224,10 +258,10 @@ export async function createApp(opts) {
             transcript,
           });
         }
-        const allRuns = await readRuns(dataDir, Number.MAX_SAFE_INTEGER);
+        const allRuns = await readRuns(state.dataDir, Number.MAX_SAFE_INTEGER);
         const run = allRuns.find(r => r.runId === runId);
         if (!run) return send(res, 404, { error: 'not found' });
-        const transcript = await readTranscript(dataDir, runId);
+        const transcript = await readTranscript(state.dataDir, runId);
         return send(res, 200, { ...run, transcript });
       }
       if (method === 'POST' && url.match(/^\/api\/runs\/[^/]+\/cancel$/)) {
@@ -246,6 +280,13 @@ export async function createApp(opts) {
   });
 
   return { server, opts };
+}
+
+function buildSkillSources(projectDir, userSkillsDir) {
+  return [
+    { dir: userSkillsDir, source: 'user' },
+    { dir: join(projectDir, '.claude', 'skills'), source: 'project' },
+  ];
 }
 
 function readBody(req) {
@@ -316,9 +357,15 @@ if (process.argv[1] && process.argv[1].endsWith('server.mjs')) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const projectDir = resolve(args.project || process.cwd());
+  const dataRoot = join(__dirname, 'data');
+  await mkdir(dataRoot, { recursive: true });
+  const cfg = await readConfig(dataRoot);
+
+  // Resolution order: --project flag > config.lastProject > cwd. The last fallback
+  // mainly bites first-run; after one switch via the UI, lastProject takes over.
+  const projectDir = resolve(args.project || cfg.lastProject || process.cwd());
   if (!existsSync(projectDir)) {
-    console.error(`--project path does not exist: ${projectDir}`);
+    console.error(`Project path does not exist: ${projectDir}`);
     process.exit(1);
   }
 
@@ -330,13 +377,17 @@ async function main() {
     process.exit(1);
   }
 
-  const dataDir = join(__dirname, 'data');
-  await mkdir(dataDir, { recursive: true });
-
-  await writeFile(join(dataDir, 'config.json'), JSON.stringify({ lastProject: projectDir, claudePath }, null, 2));
+  const dataDir = await ensureProjectDataDir(dataRoot, projectDir);
+  const migrated = await migrateLegacyData(dataRoot, dataDir);
+  if (migrated) console.log(`Migrated legacy data/runs.jsonl + data/transcripts → ${dataDir}`);
+  await writeConfig(dataRoot, {
+    lastProject: projectDir,
+    claudePath,
+    recentProjects: pushRecent(cfg.recentProjects, projectDir),
+  });
 
   const port = Number(process.env.PORT) || Number(args.port) || 3737;
-  const { server } = await createApp({ projectDir, dataDir, spawnRun: makeSpawnRun(claudePath) });
+  const { server } = await createApp({ projectDir, dataDir, dataRoot, spawnRun: makeSpawnRun(claudePath) });
   server.listen(port, () => console.log(`Agentic OS listening on http://localhost:${port}  (project: ${projectDir}, claude: ${claudePath})`));
 }
 

@@ -310,6 +310,73 @@
     .search-input::placeholder { color: var(--ink-mute); }
     .search-input:focus { outline: none; border-bottom-color: var(--accent); }
 
+    /* Wordmark hover treatment — subtle underline cue on the project name. */
+    .project-wordmark { transition: color 120ms ease; }
+    .project-wordmark:hover { color: var(--accent); }
+    .project-wordmark:focus-visible { outline: 1px dashed var(--accent); outline-offset: 4px; }
+
+    /* Project picker drawer — slides in from the left, backdrop dims behind. */
+    .project-drawer { position: fixed; inset: 0; z-index: 50; display: none; }
+    .project-drawer[data-open="true"] { display: block; }
+    .project-drawer-backdrop {
+      position: absolute; inset: 0;
+      background: rgba(8, 11, 16, 0.72);
+      backdrop-filter: blur(2px);
+      animation: drawer-fade 160ms ease-out;
+    }
+    .project-drawer-panel {
+      position: absolute; top: 0; left: 0; height: 100%;
+      width: min(440px, 92vw);
+      background: var(--bg-elev);
+      border-right: 1px solid var(--edge-strong);
+      padding: 28px 26px;
+      overflow-y: auto;
+      animation: drawer-slide 200ms cubic-bezier(0.2, 0.7, 0.2, 1);
+      box-shadow: 8px 0 32px rgba(0,0,0,0.4);
+    }
+    @keyframes drawer-fade { from { opacity: 0 } to { opacity: 1 } }
+    @keyframes drawer-slide { from { transform: translateX(-12px); opacity: 0 } to { transform: none; opacity: 1 } }
+
+    .project-current {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      color: var(--ink);
+      padding: 8px 10px;
+      background: var(--bg);
+      border: 1px solid var(--edge);
+      border-left: 2px solid var(--accent);
+      word-break: break-all;
+    }
+    .project-current .name {
+      font-family: 'Fraunces', serif;
+      font-size: 15px;
+      font-weight: 500;
+      color: var(--ink);
+      display: block;
+      margin-bottom: 2px;
+    }
+    .project-current .path { color: var(--ink-mute); font-size: 11px; }
+
+    .project-recent {
+      display: block; width: 100%;
+      text-align: left;
+      background: transparent; border: 1px solid var(--edge);
+      padding: 8px 10px;
+      cursor: pointer;
+      transition: border-color 120ms ease, color 120ms ease;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px; color: var(--ink-dim);
+    }
+    .project-recent:hover { border-color: var(--accent); color: var(--ink); }
+    .project-recent .name {
+      font-family: 'Fraunces', serif; font-size: 14px; color: var(--ink);
+      display: block; margin-bottom: 2px;
+    }
+    .project-recent .path { color: var(--ink-ghost); font-size: 11px; word-break: break-all; }
+    .project-recent.is-active { border-color: var(--edge-strong); opacity: 0.6; cursor: default; }
+    .project-recent.is-missing { color: var(--ink-mute); border-style: dashed; }
+    .project-recent.is-missing .name { color: var(--ink-mute); text-decoration: line-through; }
+
     /* Prompt textarea. */
     .prompt-input {
       width: 100%;
@@ -400,8 +467,9 @@
     <header id="topbar" class="col-span-3 flex items-center justify-between px-5 h-12 border-b border-edge">
       <div class="flex items-center gap-3">
         <span id="run-status-dot" class="status-dot" title="Idle"></span>
-        <span id="project-name" class="text-ink"
-              style="font-family:'Fraunces',serif;font-weight:500;font-size:18px;letter-spacing:-0.01em;">agentic-os</span>
+        <button id="project-name" type="button" title="Switch project"
+              class="text-ink project-wordmark"
+              style="font-family:'Fraunces',serif;font-weight:500;font-size:18px;letter-spacing:-0.01em;background:none;border:none;cursor:pointer;padding:0;color:inherit;">agentic-os</button>
         <span class="label" style="color:var(--ink-ghost);">/ command bridge</span>
       </div>
       <div class="flex items-center gap-4 text-[11px]" style="color:var(--ink-dim);font-family:'JetBrains Mono',monospace;">
@@ -471,6 +539,37 @@
     </footer>
   </div>
 
+  <!-- PROJECT PICKER DRAWER -->
+  <div id="project-drawer" class="project-drawer" aria-hidden="true">
+    <div class="project-drawer-backdrop" data-drawer-close></div>
+    <aside class="project-drawer-panel" role="dialog" aria-label="Switch project">
+      <header class="flex items-baseline justify-between mb-4">
+        <span class="label">Switch project</span>
+        <button type="button" class="btn" data-drawer-close>esc</button>
+      </header>
+
+      <div class="mb-5">
+        <div class="label mb-2" style="color:var(--ink-ghost);">Active</div>
+        <div id="project-drawer-current" class="project-current"></div>
+      </div>
+
+      <div class="mb-5">
+        <div class="label mb-2" style="color:var(--ink-ghost);">Recent</div>
+        <div id="project-drawer-recents" class="flex flex-col gap-1"></div>
+      </div>
+
+      <form id="project-drawer-form" class="flex flex-col gap-2">
+        <label for="project-drawer-input" class="label" style="color:var(--ink-ghost);">Open by path</label>
+        <input id="project-drawer-input" type="text" class="search-input"
+               placeholder="C:\path\to\project" autocomplete="off" />
+        <div class="flex items-center gap-2">
+          <button type="submit" class="btn">switch</button>
+          <span id="project-drawer-error" class="text-[11px]" style="color:var(--accent);font-family:'JetBrains Mono',monospace;"></span>
+        </div>
+      </form>
+    </aside>
+  </div>
+
   <script type="module">
     const $ = (sel) => document.querySelector(sel);
 
@@ -480,8 +579,72 @@
       return r.json();
     }
 
+    let projectState = { current: null, recents: [] };
+
     async function loadProjectName() {
-      $('#project-name').textContent = 'agentic-os';
+      try {
+        projectState = await fetchJson('/api/project');
+        $('#project-name').textContent = projectState.current?.name || 'agentic-os';
+        $('#project-name').title = projectState.current?.path || 'Switch project';
+      } catch {
+        $('#project-name').textContent = 'agentic-os';
+      }
+    }
+
+    function renderProjectDrawer() {
+      const cur = projectState.current;
+      $('#project-drawer-current').innerHTML = cur
+        ? `<span class="name">${cur.name}</span><span class="path">${cur.path}</span>`
+        : '<span class="path">none</span>';
+
+      const recents = (projectState.recents || []).filter(r => r.path !== cur?.path);
+      const target = $('#project-drawer-recents');
+      if (!recents.length) {
+        target.innerHTML = '<span class="label" style="color:var(--ink-mute);">No recent projects yet — switch once to populate.</span>';
+        return;
+      }
+      target.innerHTML = recents.map(r => `
+        <button type="button" class="project-recent ${r.exists ? '' : 'is-missing'}" data-path="${escapeHtml(r.path)}" ${r.exists ? '' : 'disabled'}>
+          <span class="name">${escapeHtml(r.name)}</span>
+          <span class="path">${escapeHtml(r.path)}</span>
+        </button>
+      `).join('');
+      target.querySelectorAll('button[data-path]').forEach(btn => {
+        btn.addEventListener('click', () => switchProject(btn.dataset.path));
+      });
+    }
+
+    function openProjectDrawer() {
+      renderProjectDrawer();
+      $('#project-drawer-error').textContent = '';
+      $('#project-drawer-input').value = '';
+      $('#project-drawer').setAttribute('data-open', 'true');
+      $('#project-drawer').setAttribute('aria-hidden', 'false');
+      setTimeout(() => $('#project-drawer-input').focus(), 50);
+    }
+    function closeProjectDrawer() {
+      $('#project-drawer').removeAttribute('data-open');
+      $('#project-drawer').setAttribute('aria-hidden', 'true');
+    }
+
+    async function switchProject(path) {
+      $('#project-drawer-error').textContent = '';
+      try {
+        const r = await fetch('/api/project', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ path }),
+        });
+        if (!r.ok) {
+          const err = await r.json().catch(() => ({}));
+          $('#project-drawer-error').textContent = err.error || `failed (${r.status})`;
+          return;
+        }
+        closeProjectDrawer();
+        // Re-pull everything that's project-scoped
+        await Promise.all([loadProjectName(), loadVaultChanges(), loadSkills(), loadHistory()]);
+      } catch (e) {
+        $('#project-drawer-error').textContent = e.message;
+      }
     }
 
     async function loadUsage() {
@@ -574,6 +737,22 @@
       bootBars();
       await loadSkills();
       loadHistory();
+    });
+
+    // Project drawer wiring
+    $('#project-name').addEventListener('click', openProjectDrawer);
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && $('#project-drawer').getAttribute('data-open') === 'true') {
+        closeProjectDrawer();
+      }
+    });
+    document.querySelectorAll('[data-drawer-close]').forEach(el => {
+      el.addEventListener('click', closeProjectDrawer);
+    });
+    $('#project-drawer-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const path = $('#project-drawer-input').value.trim();
+      if (path) switchProject(path);
     });
 
     function setRunStateTag(text) {

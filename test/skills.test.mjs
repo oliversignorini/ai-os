@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { parseSkillFrontmatter, deriveDomain, scanSkillDirs, scanPluginsDir } from '../lib/skills.mjs';
+import { parseSkillFrontmatter, deriveDomain, scanSkillDirs, scanPluginsDir, dedupePluginSkills, compareVersions } from '../lib/skills.mjs';
 
 test('parseSkillFrontmatter extracts name + description', () => {
   const md = '---\nname: research\ndescription: Research a topic\n---\n\n# Research\nbody...';
@@ -71,6 +71,49 @@ test('scanPluginsDir falls back to dirname when frontmatter missing', async () =
   const result = await scanPluginsDir(root);
   assert.equal(result.length, 1);
   assert.equal(result[0].name, 'orphan');
+  await rm(root, { recursive: true, force: true });
+});
+
+test('compareVersions handles numeric segments correctly', () => {
+  assert.equal(compareVersions('1.0.0', '1.0.0'), 0);
+  assert.ok(compareVersions('2.0.0', '1.9.9') > 0);
+  assert.ok(compareVersions('10.0.0', '9.0.0') > 0, 'numeric not lexicographic');
+  assert.ok(compareVersions('1.10.0', '1.9.0') > 0);
+  assert.ok(compareVersions('5.1.0', '5.0.0') > 0);
+});
+
+test('dedupePluginSkills keeps highest version per (vendor, plugin, skill)', () => {
+  const input = [
+    { id: 'plugin:acme/foo/1.0.0/bar', source: 'plugin:acme/foo/1.0.0', name: 'bar', path: '/p/1.0.0', description: '', domain: 'bar' },
+    { id: 'plugin:acme/foo/2.0.0/bar', source: 'plugin:acme/foo/2.0.0', name: 'bar', path: '/p/2.0.0', description: '', domain: 'bar' },
+    { id: 'plugin:acme/foo/1.5.0/bar', source: 'plugin:acme/foo/1.5.0', name: 'bar', path: '/p/1.5.0', description: '', domain: 'bar' },
+    { id: 'plugin:other/baz/1.0.0/bar', source: 'plugin:other/baz/1.0.0', name: 'bar', path: '/o/1.0.0', description: '', domain: 'bar' },
+  ];
+  const result = dedupePluginSkills(input);
+  assert.equal(result.length, 2, 'one bar from acme/foo, one from other/baz');
+  const acme = result.find(s => s.source.startsWith('plugin:acme/foo'));
+  assert.equal(acme.source, 'plugin:acme/foo/2.0.0');
+  assert.ok(result.find(s => s.source === 'plugin:other/baz/1.0.0'));
+});
+
+test('dedupePluginSkills passes through non-3-segment sources', () => {
+  const input = [
+    { id: 'plugin:weird/skill', source: 'plugin:weird', name: 'skill', path: '/w', description: '', domain: 'skill' },
+  ];
+  const result = dedupePluginSkills(input);
+  assert.equal(result.length, 1);
+});
+
+test('scanPluginsDir dedups across versions in real cache shape', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'plugins-dedup-'));
+  await mkdir(join(root, 'vendor/plug/1.0.0/skills/foo'), { recursive: true });
+  await mkdir(join(root, 'vendor/plug/2.0.0/skills/foo'), { recursive: true });
+  await writeFile(join(root, 'vendor/plug/1.0.0/skills/foo/SKILL.md'), '---\nname: foo\ndescription: old\n---\n');
+  await writeFile(join(root, 'vendor/plug/2.0.0/skills/foo/SKILL.md'), '---\nname: foo\ndescription: new\n---\n');
+  const result = await scanPluginsDir(root);
+  assert.equal(result.length, 1, 'only the newest version survives');
+  assert.equal(result[0].source, 'plugin:vendor/plug/2.0.0');
+  assert.equal(result[0].description, 'new');
   await rm(root, { recursive: true, force: true });
 });
 
