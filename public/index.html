@@ -55,8 +55,55 @@
   </div>
 
   <script type="module">
-    // App state + module init goes here in subsequent tasks.
-    console.log('Agentic OS shell loaded');
+    const $ = (sel) => document.querySelector(sel);
+
+    async function fetchJson(url) {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error(`${url} → ${r.status}`);
+      return r.json();
+    }
+
+    async function loadProjectName() {
+      // For now, derive from URL or use static placeholder; real server will set it.
+      $('#project-name').textContent = 'agentic-os';
+    }
+
+    async function loadUsage() {
+      try {
+        const usage = await fetchJson('/api/usage');
+        if (!usage) { $('#usage').textContent = ''; return; }
+        $('#usage').textContent = `Usage: 5h ${usage.fiveHourPercentUsed}% · 7d ${usage.weeklyPercentUsed}%`;
+      } catch {
+        $('#usage').textContent = ''; // graceful skip
+      }
+    }
+
+    async function loadVaultChanges() {
+      try {
+        const changes = await fetchJson('/api/vault-changes');
+        if (!changes.length) {
+          $('#vault-changes-bar').textContent = 'Recent vault changes: (none)';
+          return;
+        }
+        const text = changes
+          .map(c => `${c.status} ${c.path}`)
+          .join('  ·  ');
+        $('#vault-changes-bar').textContent = `Recent vault changes:  ${text}`;
+      } catch {
+        $('#vault-changes-bar').textContent = ''; // hide on error
+      }
+    }
+
+    async function bootBars() {
+      await Promise.all([loadProjectName(), loadUsage(), loadVaultChanges()]);
+    }
+
+    $('#refresh-btn').addEventListener('click', () => {
+      bootBars();
+      // Skill list + history reload added in later tasks.
+    });
+
+    bootBars();
   </script>
 </body>
 </html>
