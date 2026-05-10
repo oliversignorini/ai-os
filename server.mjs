@@ -22,6 +22,9 @@ import {
   PERMISSION_MODES,
   DEFAULT_PERMISSION_MODE,
   normalizePermissionMode,
+  MODELS,
+  normalizeModel,
+  computeUsage,
 } from './lib/conversations.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -308,12 +311,13 @@ export async function createApp(opts) {
         const conversationId = newConversationId();
         const createdAt = new Date().toISOString();
         const permissionMode = normalizePermissionMode(parsed.permissionMode);
+        const model = normalizeModel(parsed.model);
         await ensureConvDir(state.dataDir);
         await appendConversationIndex(state.dataDir, {
-          conversationId, title: 'New chat', createdAt, lastMessageAt: createdAt, permissionMode,
+          conversationId, title: 'New chat', createdAt, lastMessageAt: createdAt, permissionMode, model,
         });
         // Spawn lazily on first message — don't burn a child for an empty chat
-        return send(res, 200, { conversationId, title: 'New chat', createdAt, permissionMode });
+        return send(res, 200, { conversationId, title: 'New chat', createdAt, permissionMode, model });
       }
       if (method === 'PATCH' && url.match(/^\/api\/conversations\/[^/]+$/)) {
         const id = url.split('/').pop();
@@ -334,6 +338,11 @@ export async function createApp(opts) {
         if (parsed.title !== undefined) {
           const t = String(parsed.title).trim().slice(0, 100);
           if (t) updated.title = t;
+        }
+        if (parsed.model !== undefined) {
+          updated.model = normalizeModel(parsed.model);
+          const conv = activeConversations.get(id);
+          if (conv) { try { conv.child.kill('SIGTERM'); } catch {} }
         }
         if (updated === meta) return send(res, 400, { error: 'no patchable fields' });
         await appendConversationIndex(state.dataDir, updated);
@@ -363,7 +372,13 @@ export async function createApp(opts) {
         const meta = idx.find(c => c.conversationId === id);
         if (!meta) return send(res, 404, { error: 'not found' });
         const active = activeConversations.get(id);
-        return send(res, 200, { ...meta, transcript, isActive: !!active, status: active?.status || 'idle' });
+        return send(res, 200, {
+          ...meta,
+          transcript,
+          isActive: !!active,
+          status: active?.status || 'idle',
+          usage: computeUsage(transcript),
+        });
       }
       if (method === 'POST' && url.match(/^\/api\/conversations\/[^/]+\/message$/)) {
         if (!spawnChat) return send(res, 500, { error: 'chat mode not configured' });
@@ -389,6 +404,7 @@ export async function createApp(opts) {
             sessionId: id,
             resume: isResume,
             permissionMode: meta.permissionMode,
+            model: meta.model,
           });
           conv = {
             child,
@@ -557,7 +573,7 @@ function makeSpawnRun(claudePath) {
 // stream and doesn't need to splice.
 export function makeSpawnChat(claudePath) {
   const useShell = process.platform === 'win32';
-  return function spawnChat({ projectDir, sessionId, resume = false, permissionMode = DEFAULT_PERMISSION_MODE }) {
+  return function spawnChat({ projectDir, sessionId, resume = false, permissionMode = DEFAULT_PERMISSION_MODE, model = null }) {
     const args = [
       '-p',
       '--input-format', 'stream-json',
@@ -567,6 +583,8 @@ export function makeSpawnChat(claudePath) {
       '--include-partial-messages', // emit stream_event lines with text deltas
       '--permission-mode', normalizePermissionMode(permissionMode),
     ];
+    const m = normalizeModel(model);
+    if (m) args.push('--model', m);
     if (resume) args.push('--resume', sessionId);
     else args.push('--session-id', sessionId);
     const child = spawn(claudePath, args, { cwd: projectDir, shell: useShell, stdio: ['pipe', 'pipe', 'pipe'] });

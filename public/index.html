@@ -673,6 +673,22 @@
     .permission-chip[data-mode="bypassPermissions"] { color: var(--err); border-color: var(--err); }
     .permission-chip[data-mode="bypassPermissions"]:hover { background: rgba(248,113,113,0.08); }
     .permission-chip[data-mode="plan"] { color: var(--phosphor); border-color: var(--phosphor); }
+
+    /* Model chip — same skin as permission chip; colour shifts by model.
+       Default (no override) is dim ghost text; opus amber; sonnet phosphor;
+       haiku ink-dim. */
+    .model-chip[data-model="opus"] { color: var(--accent); border-color: var(--accent); }
+    .model-chip[data-model="sonnet"] { color: var(--phosphor); border-color: var(--phosphor); }
+    .model-chip[data-model="haiku"] { color: var(--ink); border-color: var(--ink-mute); }
+
+    /* Cost chip — display only, no interaction. Hidden until there's data. */
+    .cost-chip {
+      font-family: 'JetBrains Mono', monospace; font-size: 10px;
+      letter-spacing: 0.04em; color: var(--ink-mute);
+      padding: 3px 0;
+    }
+    .cost-chip strong { color: var(--ink-dim); font-weight: 500; }
+    .cost-chip:empty { display: none; }
   </style>
 </head>
 <body class="bg-bg text-ink font-mono h-screen overflow-hidden">
@@ -720,9 +736,11 @@
       <form id="composer" class="border-t border-edge px-6 py-4 flex flex-col gap-2 bg-bg">
         <textarea id="composer-input" rows="2" class="prompt-input" placeholder="Message Claude — / for skills · @ for files" autocomplete="off"></textarea>
         <div class="flex items-center justify-between">
-          <div class="flex items-center gap-3">
+          <div class="flex items-center gap-3 flex-wrap">
             <span id="composer-status" class="label" style="color:var(--ink-ghost);">idle</span>
+            <button type="button" id="model-chip" class="permission-chip model-chip" title="Click to change model">default</button>
             <button type="button" id="permission-chip" class="permission-chip" title="Click to change permissions">acceptEdits</button>
+            <span id="cost-chip" class="cost-chip" title="Cumulative cost + tokens for this conversation"></span>
           </div>
           <div class="flex gap-2">
             <button type="button" id="chat-cancel" class="btn btn-danger hidden">■ stop</button>
@@ -1062,6 +1080,25 @@
     let currentChatES = null;
     const conversationsCache = new Map(); // conversationId → meta
     const PERMISSION_CYCLE = ['acceptEdits', 'bypassPermissions', 'plan'];
+    const MODEL_CYCLE = [null, 'opus', 'sonnet', 'haiku'];
+
+    function renderModelChip(model) {
+      const chip = $('#model-chip');
+      chip.textContent = model || 'default';
+      chip.dataset.model = model || '';
+      chip.title = model
+        ? `Using ${model} for this conversation. Click to cycle.`
+        : 'Using whatever the claude CLI defaults to. Click to pick a specific model.';
+    }
+
+    function renderCostChip(usage) {
+      const chip = $('#cost-chip');
+      if (!usage || !usage.turns) { chip.innerHTML = ''; return; }
+      const cost = usage.costUsd < 0.01 ? '<$0.01' : '$' + usage.costUsd.toFixed(2);
+      const tk = usage.tokensIn + usage.tokensOut;
+      const tkLabel = tk > 1000 ? (tk / 1000).toFixed(1) + 'k' : String(tk);
+      chip.innerHTML = `<strong>${cost}</strong> · ${tkLabel} tok · ${usage.turns} turn${usage.turns === 1 ? '' : 's'}`;
+    }
 
     function renderPermissionChip(mode) {
       const chip = $('#permission-chip');
@@ -1202,6 +1239,8 @@
         // Update cache with fresh meta
         conversationsCache.set(id, { conversationId: id, title: data.title, createdAt: data.createdAt, lastMessageAt: data.lastMessageAt, permissionMode: data.permissionMode });
         renderPermissionChip(data.permissionMode);
+        renderModelChip(data.model);
+        renderCostChip(data.usage);
         const meaningfulEvents = (data.transcript || []).filter(e => ['user', 'assistant', 'result'].includes(e.type));
         if (meaningfulEvents.length === 0 && !data.isActive) {
           transcript.innerHTML = renderEmptyState();
@@ -1236,6 +1275,10 @@
           setStatusDot(ev.subtype === 'success' ? 'ok' : 'err');
           $('#chat-cancel').classList.add('hidden');
           loadConversations(); // refresh sidebar lastMessageAt
+          // Re-pull this conversation's usage and refresh the cost chip
+          fetchJson(`/api/conversations/${activeTabId}`).then(d => {
+            renderCostChip(d.usage);
+          }).catch(() => {});
         }
       };
       currentChatES.onerror = () => {
@@ -1598,6 +1641,24 @@
 
     $('#composer').addEventListener('submit', (e) => { e.preventDefault(); sendMessage(); });
     $('#new-chat-btn').addEventListener('click', newConversation);
+    $('#model-chip').addEventListener('click', async () => {
+      if (!activeTabId) return;
+      const meta = conversationsCache.get(activeTabId) || {};
+      const cur = meta.model || null;
+      const idx = MODEL_CYCLE.indexOf(cur);
+      const next = MODEL_CYCLE[(idx + 1) % MODEL_CYCLE.length];
+      try {
+        const r = await fetch(`/api/conversations/${activeTabId}`, {
+          method: 'PATCH', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ model: next }),
+        });
+        if (r.ok) {
+          conversationsCache.set(activeTabId, { ...meta, model: next });
+          renderModelChip(next);
+        }
+      } catch {}
+    });
+
     $('#permission-chip').addEventListener('click', async () => {
       if (!activeTabId) return;
       const meta = conversationsCache.get(activeTabId) || {};

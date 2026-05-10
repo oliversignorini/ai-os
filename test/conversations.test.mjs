@@ -15,6 +15,9 @@ import {
   normalizePermissionMode,
   PERMISSION_MODES,
   DEFAULT_PERMISSION_MODE,
+  normalizeModel,
+  MODELS,
+  computeUsage,
 } from '../lib/conversations.mjs';
 import { createApp } from '../server.mjs';
 
@@ -243,6 +246,108 @@ test('PATCH /api/conversations/:id updates permissionMode and is forwarded to sp
     body: JSON.stringify({ text: 'hi' }),
   });
   assert.equal(lastSpawnMode, 'bypassPermissions');
+
+  await new Promise(r => app.server.close(r));
+  await rm(projectDir, { recursive: true, force: true });
+  await rm(dataRoot, { recursive: true, force: true });
+});
+
+test('normalizeModel allows whitelist + nulls everything else', () => {
+  for (const m of MODELS) assert.equal(normalizeModel(m), m);
+  assert.equal(normalizeModel(null), null);
+  assert.equal(normalizeModel(undefined), null);
+  assert.equal(normalizeModel('garbage'), null);
+  assert.equal(normalizeModel('GPT-4'), null);
+});
+
+test('computeUsage sums cost + tokens across result events', () => {
+  const transcript = [
+    { type: 'user', message: { content: 'hi' } },
+    { type: 'assistant' },
+    { type: 'result', subtype: 'success', total_cost_usd: 0.05, usage: { input_tokens: 10, output_tokens: 20, cache_read_input_tokens: 100 } },
+    { type: 'user' },
+    { type: 'assistant' },
+    { type: 'result', subtype: 'success', total_cost_usd: 0.03, usage: { input_tokens: 5, output_tokens: 15, cache_creation_input_tokens: 50 } },
+  ];
+  const u = computeUsage(transcript);
+  assert.equal(u.turns, 2);
+  assert.equal(u.costUsd.toFixed(2), '0.08');
+  assert.equal(u.tokensIn, 15);
+  assert.equal(u.tokensOut, 35);
+  assert.equal(u.cacheReadTokens, 100);
+  assert.equal(u.cacheCreationTokens, 50);
+});
+
+test('computeUsage handles missing/empty fields gracefully', () => {
+  assert.deepEqual(computeUsage([]), { costUsd: 0, tokensIn: 0, tokensOut: 0, cacheReadTokens: 0, cacheCreationTokens: 0, turns: 0 });
+  assert.deepEqual(computeUsage(null), { costUsd: 0, tokensIn: 0, tokensOut: 0, cacheReadTokens: 0, cacheCreationTokens: 0, turns: 0 });
+  // Result event without usage doesn't crash
+  const u = computeUsage([{ type: 'result', subtype: 'success' }]);
+  assert.equal(u.turns, 1);
+  assert.equal(u.costUsd, 0);
+});
+
+test('POST /api/conversations accepts model + spawnChat receives it as --model', async () => {
+  const projectDir = await mkdtemp(join(tmpdir(), 'pmod-'));
+  const dataRoot = await mkdtemp(join(tmpdir(), 'dmod-'));
+  let lastSpawnModel = 'unset';
+  const app = await createApp({
+    projectDir, dataDir: join(dataRoot, 'projects', 'x'), dataRoot,
+    userSkillsDir: '/no', pluginsDir: '/no', statsCachePath: '/no',
+    spawnRun: () => { throw new Error('unused'); },
+    spawnChat: (opts) => { lastSpawnModel = opts.model; return { child: fakeChat() }; },
+  });
+  await new Promise(r => app.server.listen(0, r));
+  const { port } = app.server.address();
+  const base = `http://localhost:${port}`;
+
+  // Default model is null (let CLI decide)
+  const a = await (await fetch(`${base}/api/conversations`, { method: 'POST', body: '{}', headers: { 'content-type': 'application/json' } })).json();
+  assert.equal(a.model, null);
+
+  // Explicit haiku is honored, garbage drops to null
+  const b = await (await fetch(`${base}/api/conversations`, { method: 'POST', body: JSON.stringify({ model: 'haiku' }), headers: { 'content-type': 'application/json' } })).json();
+  assert.equal(b.model, 'haiku');
+  const c = await (await fetch(`${base}/api/conversations`, { method: 'POST', body: JSON.stringify({ model: 'gpt-4' }), headers: { 'content-type': 'application/json' } })).json();
+  assert.equal(c.model, null);
+
+  // Sending a message forwards the chosen model
+  await fetch(`${base}/api/conversations/${b.conversationId}/message`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text: 'hi' }),
+  });
+  assert.equal(lastSpawnModel, 'haiku');
+
+  await new Promise(r => app.server.close(r));
+  await rm(projectDir, { recursive: true, force: true });
+  await rm(dataRoot, { recursive: true, force: true });
+});
+
+test('GET /api/conversations/:id returns derived usage', async () => {
+  const projectDir = await mkdtemp(join(tmpdir(), 'pus-'));
+  const dataRoot = await mkdtemp(join(tmpdir(), 'dus-'));
+  const dataDir = join(dataRoot, 'projects', 'x');
+  const app = await createApp({
+    projectDir, dataDir, dataRoot,
+    userSkillsDir: '/no', pluginsDir: '/no', statsCachePath: '/no',
+    spawnRun: () => { throw new Error('unused'); },
+    spawnChat: () => ({ child: fakeChat() }),
+  });
+  await new Promise(r => app.server.listen(0, r));
+  const { port } = app.server.address();
+  const base = `http://localhost:${port}`;
+
+  const { conversationId } = await (await fetch(`${base}/api/conversations`, { method: 'POST', body: '{}', headers: { 'content-type': 'application/json' } })).json();
+
+  // Manually inject a result event into the transcript file
+  await appendConversationEvent(dataDir, conversationId, {
+    type: 'result', subtype: 'success', total_cost_usd: 0.42, usage: { input_tokens: 100, output_tokens: 200 },
+  });
+
+  const data = await (await fetch(`${base}/api/conversations/${conversationId}`)).json();
+  assert.equal(data.usage.turns, 1);
+  assert.equal(data.usage.costUsd.toFixed(2), '0.42');
+  assert.equal(data.usage.tokensIn + data.usage.tokensOut, 300);
 
   await new Promise(r => app.server.close(r));
   await rm(projectDir, { recursive: true, force: true });
