@@ -458,6 +458,87 @@
       padding-left: 14px;
       border-left: 1px solid var(--phosphor);
     }
+
+    /* ─── Chat mode ─────────────────────────────────────────── */
+    .tab {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 0 14px; height: 36px;
+      font-family: 'JetBrains Mono', monospace; font-size: 12px;
+      color: var(--ink-dim); background: transparent;
+      border: none; border-right: 1px solid var(--edge);
+      cursor: pointer; max-width: 240px;
+      transition: color 120ms ease, background 120ms ease;
+    }
+    .tab:hover { color: var(--ink); background: var(--bg-elev); }
+    .tab.is-active { color: var(--accent); background: var(--bg-elev); border-bottom: 2px solid var(--accent); }
+    .tab .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 180px; }
+    .tab .close {
+      color: var(--ink-ghost); margin-left: 4px;
+      cursor: pointer; padding: 0 2px;
+    }
+    .tab .close:hover { color: var(--err); }
+    .tab .status-glyph { font-size: 9px; color: var(--phosphor); }
+    .tab.is-running .status-glyph { color: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
+    .tab-new {
+      padding: 0 14px; font-family: 'JetBrains Mono', monospace; font-size: 12px;
+      color: var(--ink-ghost); background: transparent; border: none;
+      cursor: pointer; transition: color 120ms ease;
+    }
+    .tab-new:hover { color: var(--accent); }
+
+    .transcript-chat { font-family: 'JetBrains Mono', monospace; font-size: 13px; line-height: 1.6; }
+    .chat-msg { margin-bottom: 18px; max-width: 760px; }
+    .chat-msg.user .role { color: var(--accent); }
+    .chat-msg.assistant .role { color: var(--phosphor); font-style: italic; font-family: 'Fraunces', serif; font-size: 14px; }
+    .chat-msg .role {
+      font-size: 10px; text-transform: uppercase; letter-spacing: 0.12em;
+      margin-bottom: 6px; color: var(--ink-ghost);
+    }
+    .chat-msg .body { color: var(--ink); white-space: pre-wrap; word-wrap: break-word; }
+    .chat-msg.system { color: var(--ink-mute); font-size: 11px; font-style: italic; padding: 4px 0; }
+    .chat-msg.tool { margin-left: 0; }
+    .chat-msg.result-final {
+      margin-top: 8px; padding: 6px 10px;
+      border-left: 2px solid var(--phosphor);
+      background: var(--bg-elev); font-size: 11px; color: var(--ink-dim);
+    }
+
+    .composer { padding: 16px 24px; border-top: 1px solid var(--edge); background: var(--bg); }
+
+    /* Skill autocomplete dropdown */
+    .skill-autocomplete {
+      position: absolute; bottom: 100px; left: 24px; right: 24px; max-width: 600px;
+      background: var(--bg-elev); border: 1px solid var(--edge-strong);
+      max-height: 240px; overflow-y: auto; z-index: 10;
+      box-shadow: 0 -8px 24px rgba(0,0,0,0.4);
+    }
+    .skill-autocomplete .item {
+      padding: 6px 12px; cursor: pointer; font-family: 'JetBrains Mono', monospace;
+      font-size: 12px; color: var(--ink-dim); border-bottom: 1px solid var(--edge);
+    }
+    .skill-autocomplete .item:hover, .skill-autocomplete .item.is-active {
+      background: var(--bg); color: var(--accent);
+    }
+    .skill-autocomplete .item .desc {
+      color: var(--ink-ghost); font-size: 11px; margin-top: 2px;
+    }
+
+    /* Conversations sidebar */
+    .conv-card {
+      display: block; width: 100%; text-align: left;
+      background: transparent; border: 1px solid transparent;
+      padding: 10px 10px; cursor: pointer; margin-bottom: 4px;
+      font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--ink-dim);
+      transition: border-color 120ms ease, color 120ms ease;
+    }
+    .conv-card:hover { border-color: var(--edge); color: var(--ink); }
+    .conv-card.is-active { border-color: var(--accent); color: var(--ink); background: var(--bg-elev); }
+    .conv-card .title {
+      font-family: 'Fraunces', serif; font-size: 14px; color: var(--ink);
+      display: block; margin-bottom: 2px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .conv-card .meta { font-size: 10px; color: var(--ink-ghost); }
   </style>
 </head>
 <body class="bg-bg text-ink font-mono h-screen overflow-hidden">
@@ -490,45 +571,34 @@
       <div id="skill-list" class="px-1"><!-- populated by JS --></div>
     </aside>
 
-    <!-- CENTER PANE: RUN -->
-    <main id="run-pane" class="overflow-y-auto px-8 py-8">
-      <div id="run-empty" class="select-none">
-        <div class="label mb-3">Standby</div>
-        <p style="font-family:'Fraunces',serif;font-size:32px;font-weight:300;line-height:1.15;letter-spacing:-0.02em;color:var(--ink);max-width:440px;">
-          Pick a skill from the bridge to begin.<span class="caret"></span>
-        </p>
-        <p class="mt-4 text-[12px]" style="color:var(--ink-dim);max-width:440px;line-height:1.55;">
-          Each skill spawns its own <span style="color:var(--accent);">claude&nbsp;-p</span> child and streams events back here as they happen. Cancel anytime; transcripts persist to <span class="text-[11px]" style="color:var(--ink-mute);">data/runs/&lt;id&gt;.jsonl</span>.
-        </p>
+    <!-- CENTER PANE: CHAT -->
+    <main id="chat-pane" class="flex flex-col overflow-hidden border-l-0">
+      <div id="tab-strip" class="flex items-stretch border-b border-edge bg-bg overflow-x-auto" style="min-height:36px;">
+        <!-- tabs populated by JS -->
+        <button id="new-chat-btn" class="tab-new" title="New chat">+ new</button>
       </div>
-
-      <div id="run-active" class="hidden space-y-5">
-        <div class="flex items-baseline justify-between">
-          <div class="flex items-baseline gap-3">
-            <h2 id="run-skill-name" style="font-family:'JetBrains Mono',monospace;font-weight:600;font-size:18px;color:var(--ink);letter-spacing:-0.01em;"></h2>
-            <span id="run-skill-source" class="label" style="color:var(--ink-mute);"></span>
+      <div id="chat-transcript" class="flex-1 overflow-y-auto px-8 py-6 transcript-chat">
+        <!-- messages rendered here -->
+      </div>
+      <form id="composer" class="border-t border-edge px-6 py-4 flex flex-col gap-2 bg-bg">
+        <textarea id="composer-input" rows="2" class="prompt-input" placeholder="Message Claude — / for skills" autocomplete="off"></textarea>
+        <div class="flex items-center justify-between">
+          <span id="composer-status" class="label" style="color:var(--ink-ghost);">idle</span>
+          <div class="flex gap-2">
+            <button type="button" id="chat-cancel" class="btn btn-danger hidden">■ stop</button>
+            <button type="submit" id="composer-send" class="btn btn-primary">↵ send</button>
           </div>
-          <span id="run-state-tag" class="label" style="color:var(--ink-ghost);"></span>
         </div>
-        <p id="run-skill-description" style="font-family:'JetBrains Mono',monospace;font-size:12.5px;color:var(--ink-dim);line-height:1.55;max-width:60ch;"></p>
-
-        <textarea id="run-prompt" rows="3" class="prompt-input"></textarea>
-
-        <div class="flex gap-2">
-          <button id="run-submit" class="btn btn-primary">▶ run</button>
-          <button id="run-stop" class="btn btn-danger hidden">■ stop</button>
-        </div>
-
-        <div id="run-transcript" class="transcript"></div>
-      </div>
+        <div id="skill-autocomplete" class="skill-autocomplete hidden"></div>
+      </form>
     </main>
 
-    <!-- RIGHT PANE: HISTORY -->
-    <aside id="history-pane" class="overflow-y-auto px-3 pt-4 pb-6 border-l border-edge">
+    <!-- RIGHT PANE: CONVERSATIONS -->
+    <aside id="conv-pane" class="overflow-y-auto px-3 pt-4 pb-6 border-l border-edge">
       <div class="px-1 mb-3">
-        <span class="label">Run History</span>
+        <span class="label">Conversations</span>
       </div>
-      <div id="history-list" class="px-1"><!-- populated by JS --></div>
+      <div id="conv-list" class="px-1"><!-- populated by JS --></div>
     </aside>
 
     <!-- BOTTOM BAR -->
@@ -641,7 +711,7 @@
         }
         closeProjectDrawer();
         // Re-pull everything that's project-scoped
-        await Promise.all([loadProjectName(), loadVaultChanges(), loadSkills(), loadHistory()]);
+        await Promise.all([loadProjectName(), loadVaultChanges(), loadSkills(), loadConversations()]);
       } catch (e) {
         $('#project-drawer-error').textContent = e.message;
       }
@@ -736,7 +806,7 @@
     $('#refresh-btn').addEventListener('click', async () => {
       bootBars();
       await loadSkills();
-      loadHistory();
+      loadConversations();
     });
 
     // Project drawer wiring
@@ -755,9 +825,6 @@
       if (path) switchProject(path);
     });
 
-    function setRunStateTag(text) {
-      $('#run-state-tag').textContent = text || '';
-    }
     function setStatusDot(state) {
       const dot = $('#run-status-dot');
       dot.classList.remove('is-running', 'is-ok', 'is-err', 'is-cancel');
@@ -765,131 +832,239 @@
       dot.title = state ? state[0].toUpperCase() + state.slice(1) : 'Idle';
     }
 
-    function setActiveSkillCard(skillId) {
-      document.querySelectorAll('.skill-card.is-active').forEach(el => el.classList.remove('is-active'));
-      const card = document.querySelector(`.skill-card[data-skill-id="${CSS.escape(skillId)}"]`);
-      if (card) card.classList.add('is-active');
+    function setComposerStatus(text) {
+      $('#composer-status').textContent = text || 'idle';
     }
 
-    function openRunPane(skill) {
-      $('#run-empty').classList.add('hidden');
-      $('#run-active').classList.remove('hidden');
-      $('#run-skill-name').textContent = skill.name;
-      $('#run-skill-source').textContent = skill.source;
-      $('#run-skill-description').textContent = skill.description;
-      $('#run-prompt').value = `/${skill.name} `;
-      $('#run-prompt').readOnly = false;
-      $('#run-transcript').textContent = '';
-      $('#run-submit').classList.remove('hidden');
-      $('#run-stop').classList.add('hidden');
-      setRunStateTag('Ready');
-      setStatusDot(null);
-      setActiveSkillCard(skill.id);
-      $('#run-prompt').focus();
-    }
-
+    // Skill click → insert /skill-name into composer (no run pane anymore)
     document.addEventListener('click', (e) => {
       const card = e.target.closest('.skill-card');
       if (!card) return;
       const skill = allSkills.find(s => s.id === card.dataset.skillId);
-      if (skill) openRunPane(skill);
+      if (!skill) return;
+      const input = $('#composer-input');
+      input.value = (input.value ? input.value.trimEnd() + ' ' : '') + `/${skill.name} `;
+      input.focus();
     });
 
-    let currentRunId = null;
-    let currentEventSource = null;
+    // ─── Chat mode ──────────────────────────────────────────────────────
+    // Tabs are an array of conversationIds; activeTabId is the visible one.
+    // Conversations on disk are the source of truth for history; tabs are
+    // the working set the user has open. Tabs persist in localStorage.
+    let openTabs = [];
+    let activeTabId = null;
+    let currentChatES = null;
+    const conversationsCache = new Map(); // conversationId → meta
 
-    async function startRun() {
-      const prompt = $('#run-prompt').value.trim();
-      const skillName = $('#run-skill-name').textContent;
-      const skill = allSkills.find(s => s.name === skillName);
-      if (!skill || !prompt) return;
-
-      $('#run-submit').classList.add('hidden');
-      $('#run-stop').classList.remove('hidden');
-      $('#run-transcript').textContent = '';
-      setRunStateTag('Running');
-      setStatusDot('running');
-
-      const r = await fetch('/api/run', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ skillId: skill.id, prompt }),
-      });
-      const { runId } = await r.json();
-      currentRunId = runId;
-      localStorage.setItem('agentic-os.currentRunId', runId);
-      localStorage.setItem('agentic-os.currentSkillId', skill.id);
-      localStorage.setItem('agentic-os.currentPrompt', prompt);
-      attachStream(runId);
+    function saveTabs() {
+      localStorage.setItem('agentic-os.openTabs', JSON.stringify(openTabs));
+      if (activeTabId) localStorage.setItem('agentic-os.activeTab', activeTabId);
+    }
+    function loadTabs() {
+      try {
+        openTabs = JSON.parse(localStorage.getItem('agentic-os.openTabs') || '[]');
+      } catch { openTabs = []; }
+      activeTabId = localStorage.getItem('agentic-os.activeTab') || null;
     }
 
-    function attachStream(runId) {
-      if (currentEventSource) currentEventSource.close();
-      const transcript = $('#run-transcript');
-      transcript.textContent = '';
+    async function loadConversations() {
+      let convs = [];
+      try { convs = await fetchJson('/api/conversations'); } catch {}
+      conversationsCache.clear();
+      for (const c of convs) conversationsCache.set(c.conversationId, c);
+      renderConvSidebar(convs);
+      return convs;
+    }
 
-      currentEventSource = new EventSource(`/api/runs/${runId}/stream`);
+    function renderConvSidebar(convs) {
+      const target = $('#conv-list');
+      if (!convs.length) {
+        target.innerHTML = `<div class="text-[11px] px-2" style="color:var(--ink-mute);">no conversations yet</div>`;
+        return;
+      }
+      target.innerHTML = convs.map(c => `
+        <button type="button" class="conv-card ${c.conversationId === activeTabId ? 'is-active' : ''}" data-conv-id="${escapeHtml(c.conversationId)}">
+          <span class="title">${escapeHtml(c.title || 'New chat')}</span>
+          <span class="meta">${relativeTime(c.lastMessageAt || c.createdAt)}</span>
+        </button>
+      `).join('');
+    }
 
-      currentEventSource.onmessage = (e) => {
-        let event;
-        try { event = JSON.parse(e.data); } catch { return; }
-        renderEvent(event, transcript);
+    function renderTabs() {
+      const strip = $('#tab-strip');
+      const newBtn = $('#new-chat-btn');
+      // Wipe everything except the new-chat button
+      [...strip.children].forEach(el => { if (el.id !== 'new-chat-btn') el.remove(); });
+      for (const id of openTabs) {
+        const meta = conversationsCache.get(id) || { title: 'New chat' };
+        const tab = document.createElement('button');
+        tab.className = 'tab' + (id === activeTabId ? ' is-active' : '');
+        tab.dataset.convId = id;
+        tab.innerHTML = `
+          <span class="status-glyph">●</span>
+          <span class="title">${escapeHtml(meta.title || 'New chat')}</span>
+          <span class="close" data-close="${escapeHtml(id)}">×</span>
+        `;
+        strip.insertBefore(tab, newBtn);
+      }
+    }
+
+    async function openConversation(id) {
+      activeTabId = id;
+      if (!openTabs.includes(id)) openTabs.push(id);
+      saveTabs();
+      renderTabs();
+      renderConvSidebar(Array.from(conversationsCache.values()));
+
+      // Detach old stream + load transcript
+      if (currentChatES) { currentChatES.close(); currentChatES = null; }
+      const transcript = $('#chat-transcript');
+      transcript.innerHTML = '';
+      pendingTools.clear();
+      try {
+        const data = await fetchJson(`/api/conversations/${id}`);
+        // Update cache with fresh meta
+        conversationsCache.set(id, { conversationId: id, title: data.title, createdAt: data.createdAt, lastMessageAt: data.lastMessageAt });
+        for (const ev of data.transcript || []) renderChatEvent(ev, transcript);
+        if (data.isActive) attachChatStream(id);
+        setComposerStatus(data.isActive ? 'streaming…' : 'idle');
+      } catch (e) {
+        transcript.innerHTML = `<div class="chat-msg system">Failed to load: ${escapeHtml(e.message)}</div>`;
+      }
+    }
+
+    function attachChatStream(id) {
+      if (currentChatES) currentChatES.close();
+      currentChatES = new EventSource(`/api/conversations/${id}/stream`);
+      const transcript = $('#chat-transcript');
+      currentChatES.onmessage = (e) => {
+        let ev;
+        try { ev = JSON.parse(e.data); } catch { return; }
+        if (ev.type === 'system' && ev.subtype === 'inactive') {
+          currentChatES.close(); currentChatES = null;
+          setComposerStatus('idle');
+          return;
+        }
+        renderChatEvent(ev, transcript);
+        if (ev.type === 'result') {
+          setComposerStatus('idle');
+          $('#chat-cancel').classList.add('hidden');
+          loadConversations(); // refresh sidebar lastMessageAt
+        }
       };
-
-      currentEventSource.onerror = () => {
-        currentEventSource.close();
-        $('#run-submit').classList.remove('hidden');
-        $('#run-stop').classList.add('hidden');
+      currentChatES.onerror = () => {
+        currentChatES.close(); currentChatES = null;
+        setComposerStatus('idle');
+        $('#chat-cancel').classList.add('hidden');
       };
     }
 
-    function onRunComplete(state) {
-      // state: 'ok' | 'err' | 'cancel' (visual only — defaults to 'ok')
-      $('#run-submit').classList.remove('hidden');
-      $('#run-stop').classList.add('hidden');
-      setRunStateTag(state === 'err' ? 'Error' : state === 'cancel' ? 'Cancelled' : 'Done');
-      setStatusDot(state || 'ok');
-      loadHistory();
-      loadVaultChanges();
-      localStorage.removeItem('agentic-os.currentRunId');
-      localStorage.removeItem('agentic-os.currentSkillId');
-      localStorage.removeItem('agentic-os.currentPrompt');
-      currentRunId = null;
+    async function newConversation() {
+      const r = await fetch('/api/conversations', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+      const meta = await r.json();
+      conversationsCache.set(meta.conversationId, meta);
+      await openConversation(meta.conversationId);
+      $('#composer-input').focus();
+    }
+
+    function closeTab(id) {
+      openTabs = openTabs.filter(t => t !== id);
+      if (activeTabId === id) activeTabId = openTabs[openTabs.length - 1] || null;
+      saveTabs();
+      renderTabs();
+      if (activeTabId) openConversation(activeTabId);
+      else $('#chat-transcript').innerHTML = '<div class="chat-msg system">No conversation open. Click <em>+ new</em> or pick one from the right pane.</div>';
+    }
+
+    async function sendMessage() {
+      const input = $('#composer-input');
+      const text = input.value.trim();
+      if (!text || !activeTabId) return;
+      input.value = '';
+      setComposerStatus('thinking…');
+      $('#chat-cancel').classList.remove('hidden');
+
+      // Optimistic user-message render before server confirms
+      const transcript = $('#chat-transcript');
+      const userBubble = document.createElement('div');
+      userBubble.className = 'chat-msg user';
+      userBubble.innerHTML = `<div class="role">you</div><div class="body">${escapeHtml(text)}</div>`;
+      transcript.appendChild(userBubble);
+      transcript.scrollTop = transcript.scrollHeight;
+
+      try {
+        const r = await fetch(`/api/conversations/${activeTabId}/message`, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ text }),
+        });
+        if (!r.ok) {
+          const err = await r.json().catch(() => ({}));
+          setComposerStatus('error: ' + (err.error || r.status));
+          return;
+        }
+        // Server is now spawning/streaming — attach if not already
+        if (!currentChatES) attachChatStream(activeTabId);
+      } catch (e) {
+        setComposerStatus('error: ' + e.message);
+      }
     }
 
     const pendingTools = new Map();
 
-    function renderEvent(event, container) {
+    function renderChatEvent(event, container) {
+      // Filter out hook noise unless useful
       if (event.type === 'system') {
-        // Friendlier label for stderr / hooks vs init
-        const label = event.subtype || 'system';
-        const span = document.createElement('span');
-        span.className = 'system';
-        span.innerHTML = `── <span class="label-text">${escapeHtml(label)}</span> ──\n`;
+        if (event.subtype === 'hook_started' || event.subtype === 'hook_response') return;
+        if (event.subtype === 'init') return;
+        const span = document.createElement('div');
+        span.className = 'chat-msg system';
+        span.textContent = `── ${event.subtype || 'system'}${event.message ? ': ' + event.message : ''}`;
         container.appendChild(span);
         container.scrollTop = container.scrollHeight;
         return;
       }
-      if (event.type === 'result') {
-        // Claude's result event uses subtype: 'success' | 'error_*' etc.
-        // exit_code may or may not be present depending on version.
-        const subtype = event.subtype || 'result';
-        const isOk = subtype === 'success';
-        const isErr = subtype.startsWith('error');
-        const cls = isOk ? 'result-ok' : isErr ? 'result-err' : 'result-cancel';
-        const exitInfo = (event.exit_code != null) ? ` · exit ${event.exit_code}` : '';
-        const span = document.createElement('span');
-        span.className = cls;
-        span.innerHTML = `\n■ <span class="label-text">${escapeHtml(subtype)}</span>${escapeHtml(exitInfo)}`;
-        container.appendChild(span);
+      if (event.type === 'user' && event.message?.content) {
+        // user echo from --replay-user-messages, OR tool_result blocks
+        const blocks = Array.isArray(event.message.content) ? event.message.content : [{ type: 'text', text: String(event.message.content) }];
+        for (const block of blocks) {
+          if (block.type === 'tool_result') {
+            const target = pendingTools.get(block.tool_use_id);
+            if (target) {
+              const text = typeof block.content === 'string' ? block.content : JSON.stringify(block.content);
+              target.textContent = text.length > 400 ? text.slice(0, 400) + '\n… (truncated)' : text;
+              target.classList.remove('hidden');
+              pendingTools.delete(block.tool_use_id);
+            }
+          } else if (block.type === 'text') {
+            // Skip echoes — we already rendered the user message optimistically
+            // unless transcript replay (no optimistic), in which case render it.
+            const lastUser = container.querySelector('.chat-msg.user:last-of-type .body');
+            if (!lastUser || lastUser.textContent !== block.text) {
+              const div = document.createElement('div');
+              div.className = 'chat-msg user';
+              div.innerHTML = `<div class="role">you</div><div class="body">${escapeHtml(block.text)}</div>`;
+              container.appendChild(div);
+            }
+          }
+        }
         container.scrollTop = container.scrollHeight;
-        onRunComplete(isOk ? 'ok' : isErr ? 'err' : 'ok');
         return;
       }
       if (event.type === 'assistant' && event.message?.content) {
+        // Group all blocks of one assistant turn into a single bubble
+        let bubble = container.querySelector('.chat-msg.assistant.streaming');
+        if (!bubble) {
+          bubble = document.createElement('div');
+          bubble.className = 'chat-msg assistant streaming';
+          bubble.innerHTML = `<div class="role">claude</div><div class="body"></div>`;
+          container.appendChild(bubble);
+        }
+        const body = bubble.querySelector('.body');
         for (const block of event.message.content) {
           if (block.type === 'text') {
-            appendBlock(container, block.text, 'text');
+            const span = document.createElement('span');
+            span.textContent = block.text;
+            body.appendChild(span);
           } else if (block.type === 'tool_use') {
             const det = document.createElement('details');
             det.className = 'tool-call';
@@ -902,34 +1077,28 @@
               <pre class="tool-input">${escapeHtml(JSON.stringify(block.input, null, 2))}</pre>
               <pre class="tool-result hidden"></pre>
             `;
-            const resultPlaceholder = det.querySelector('.tool-result');
-            pendingTools.set(block.id, resultPlaceholder);
-            container.appendChild(det);
+            const placeholder = det.querySelector('.tool-result');
+            pendingTools.set(block.id, placeholder);
+            body.appendChild(det);
           }
         }
         container.scrollTop = container.scrollHeight;
         return;
       }
-      if (event.type === 'user' && event.message?.content) {
-        for (const block of event.message.content) {
-          if (block.type === 'tool_result') {
-            const target = pendingTools.get(block.tool_use_id);
-            if (target) {
-              const text = typeof block.content === 'string' ? block.content : JSON.stringify(block.content);
-              target.textContent = text.length > 400 ? text.slice(0, 400) + '\n… (truncated)' : text;
-              target.classList.remove('hidden');
-              pendingTools.delete(block.tool_use_id);
-            }
-          }
+      if (event.type === 'result') {
+        // Mark current assistant bubble as no-longer-streaming so the next turn starts a fresh one
+        container.querySelectorAll('.chat-msg.assistant.streaming').forEach(el => el.classList.remove('streaming'));
+        const subtype = event.subtype || 'result';
+        if (subtype !== 'success') {
+          const div = document.createElement('div');
+          div.className = 'chat-msg result-final';
+          div.textContent = `[${subtype}]`;
+          container.appendChild(div);
         }
         container.scrollTop = container.scrollHeight;
         return;
       }
-      // Unknown event types render as a faint dim line — graceful, not noisy.
-      const span = document.createElement('span');
-      span.className = 'unknown';
-      span.textContent = `· ${event.type}\n`;
-      container.appendChild(span);
+      // Unknown
     }
 
     function summarizeInput(input) {
@@ -944,98 +1113,85 @@
       return k ? `${k}: …` : '';
     }
 
-    function appendBlock(container, text, klass = '') {
-      const span = document.createElement('span');
-      if (klass) span.className = klass;
-      span.textContent = text;
-      container.appendChild(span);
-      container.scrollTop = container.scrollHeight;
+    // Skill autocomplete in composer (triggered by /)
+    let acIndex = -1;
+    let acMatches = [];
+    function updateAutocomplete() {
+      const input = $('#composer-input');
+      const v = input.value;
+      const m = v.match(/(?:^|\s)\/([\w:-]*)$/);
+      const ac = $('#skill-autocomplete');
+      if (!m) { ac.classList.add('hidden'); acMatches = []; return; }
+      const q = m[1].toLowerCase();
+      acMatches = allSkills
+        .filter(s => s.name.toLowerCase().includes(q))
+        .slice(0, 8);
+      if (!acMatches.length) { ac.classList.add('hidden'); return; }
+      acIndex = 0;
+      ac.innerHTML = acMatches.map((s, i) => `
+        <div class="item ${i === 0 ? 'is-active' : ''}" data-name="${escapeHtml(s.name)}">
+          /${escapeHtml(s.name)}
+          <div class="desc">${escapeHtml(s.description.slice(0, 80))}</div>
+        </div>
+      `).join('');
+      ac.classList.remove('hidden');
+    }
+    function applyAutocomplete(name) {
+      const input = $('#composer-input');
+      input.value = input.value.replace(/(?:^|\s)\/([\w:-]*)$/, (m, p) => m.replace('/' + p, '/' + name + ' '));
+      $('#skill-autocomplete').classList.add('hidden');
+      input.focus();
     }
 
-    function statusGlyph(status, exitCode) {
-      if (status === 'cancelled') return { glyph: '⊘', color: 'var(--ink-mute)' };
-      if (exitCode === 0) return { glyph: '●', color: 'var(--phosphor)' };
-      if (exitCode != null) return { glyph: '●', color: 'var(--err)' };
-      return { glyph: '○', color: 'var(--accent)' };
-    }
-
-    function renderHistoryItem(run) {
-      const skillName = (allSkills.find(s => s.id === run.skillId) || { name: run.skillId }).name;
-      const { glyph, color } = statusGlyph(run.status, run.exitCode);
-      return `
-        <button class="history-item" data-run-id="${escapeHtml(run.runId)}">
-          <div class="row">
-            <span style="color:${color};font-size:9px;line-height:1;">${glyph}</span>
-            <span class="name">${escapeHtml(skillName)}</span>
-          </div>
-          <div class="time">${relativeTime(run.startedAt)}</div>
-        </button>
-      `;
-    }
-
-    async function loadHistory() {
-      try {
-        const runs = await fetchJson('/api/runs?limit=50');
-        if (!runs.length) {
-          $('#history-list').innerHTML = `<div class="text-[11px] px-2" style="color:var(--ink-mute);">no runs yet</div>`;
-          return;
-        }
-        $('#history-list').innerHTML = runs.map(renderHistoryItem).join('');
-      } catch {
-        $('#history-list').innerHTML = `<div class="text-[11px] px-2" style="color:var(--ink-mute);">history unavailable</div>`;
+    $('#composer-input').addEventListener('input', updateAutocomplete);
+    $('#composer-input').addEventListener('keydown', (e) => {
+      const ac = $('#skill-autocomplete');
+      const acVisible = !ac.classList.contains('hidden');
+      if (acVisible && e.key === 'ArrowDown') {
+        e.preventDefault();
+        acIndex = Math.min(acMatches.length - 1, acIndex + 1);
+        ac.querySelectorAll('.item').forEach((el, i) => el.classList.toggle('is-active', i === acIndex));
+      } else if (acVisible && e.key === 'ArrowUp') {
+        e.preventDefault();
+        acIndex = Math.max(0, acIndex - 1);
+        ac.querySelectorAll('.item').forEach((el, i) => el.classList.toggle('is-active', i === acIndex));
+      } else if (acVisible && (e.key === 'Tab' || e.key === 'Enter') && acMatches[acIndex]) {
+        e.preventDefault();
+        applyAutocomplete(acMatches[acIndex].name);
+      } else if (e.key === 'Escape' && acVisible) {
+        ac.classList.add('hidden');
+      } else if (e.key === 'Enter' && !e.shiftKey && !acVisible) {
+        e.preventDefault();
+        sendMessage();
       }
-    }
-
-    $('#run-submit').addEventListener('click', startRun);
-
-    async function openPastRun(runId) {
-      if (currentEventSource) currentEventSource.close();
-      const data = await fetchJson(`/api/runs/${runId}`);
-      const skill = allSkills.find(s => s.id === data.skillId)
-        || { name: data.skillId, source: '?', description: '(skill not found in registry)' };
-
-      $('#run-empty').classList.add('hidden');
-      $('#run-active').classList.remove('hidden');
-      $('#run-skill-name').textContent = skill.name;
-      $('#run-skill-source').textContent = skill.source;
-      $('#run-skill-description').textContent = skill.description;
-      $('#run-prompt').value = data.prompt;
-      $('#run-prompt').readOnly = true;
-      $('#run-submit').classList.add('hidden');
-      $('#run-stop').classList.add('hidden');
-      setRunStateTag('Replay');
-      const isOk = (data.status === 'ok' || data.exitCode === 0);
-      setStatusDot(data.status === 'cancelled' ? 'cancel' : (isOk ? 'ok' : 'err'));
-      setActiveSkillCard(skill.id);
-
-      const transcript = $('#run-transcript');
-      transcript.textContent = '';
-      pendingTools.clear();
-      for (const event of (data.transcript || [])) {
-        renderEvent(event, transcript);
-      }
-      // renderEvent's `result` branch calls onRunComplete which un-hides Run.
-      // Re-hide for past-run read-only view.
-      $('#run-submit').classList.add('hidden');
-      $('#run-stop').classList.add('hidden');
-      setRunStateTag('Replay');
-    }
-
-    document.addEventListener('click', (e) => {
-      const item = e.target.closest('.history-item');
-      if (!item) return;
-      openPastRun(item.dataset.runId);
+    });
+    $('#skill-autocomplete').addEventListener('mousedown', (e) => {
+      const item = e.target.closest('.item');
+      if (item) { e.preventDefault(); applyAutocomplete(item.dataset.name); }
     });
 
-    $('#run-stop').addEventListener('click', async () => {
-      if (!currentRunId) return;
-      try { await fetch(`/api/runs/${currentRunId}/cancel`, { method: 'POST' }); } catch {}
-      if (currentEventSource) currentEventSource.close();
-      const span = document.createElement('span');
-      span.className = 'result-cancel';
-      span.innerHTML = `\n■ <span class="label-text">cancelled</span>`;
-      $('#run-transcript').appendChild(span);
-      onRunComplete('cancel');
+    $('#composer').addEventListener('submit', (e) => { e.preventDefault(); sendMessage(); });
+    $('#new-chat-btn').addEventListener('click', newConversation);
+    $('#chat-cancel').addEventListener('click', async () => {
+      if (!activeTabId) return;
+      try { await fetch(`/api/conversations/${activeTabId}/cancel`, { method: 'POST' }); } catch {}
+      if (currentChatES) currentChatES.close();
+      setComposerStatus('cancelled');
+      $('#chat-cancel').classList.add('hidden');
+    });
+
+    // Tab strip click — switch or close
+    $('#tab-strip').addEventListener('click', (e) => {
+      const close = e.target.closest('[data-close]');
+      if (close) { e.stopPropagation(); closeTab(close.dataset.close); return; }
+      const tab = e.target.closest('.tab');
+      if (tab) openConversation(tab.dataset.convId);
+    });
+
+    // Conversation sidebar click
+    $('#conv-list').addEventListener('click', (e) => {
+      const card = e.target.closest('.conv-card');
+      if (card) openConversation(card.dataset.convId);
     });
 
     $('#skill-search').addEventListener('input', (e) => {
@@ -1047,33 +1203,26 @@
       renderSkills(filtered);
     });
 
-    async function maybeReattach() {
-      const runId = localStorage.getItem('agentic-os.currentRunId');
-      const skillId = localStorage.getItem('agentic-os.currentSkillId');
-      const prompt = localStorage.getItem('agentic-os.currentPrompt');
-      if (!runId || !skillId) return;
-
-      const skill = allSkills.find(s => s.id === skillId);
-      if (!skill) {
-        localStorage.removeItem('agentic-os.currentRunId');
-        return;
+    async function bootChat() {
+      loadTabs();
+      const convs = await loadConversations();
+      // Drop closed/invalid tabs
+      openTabs = openTabs.filter(id => convs.find(c => c.conversationId === id));
+      if (activeTabId && !openTabs.includes(activeTabId)) activeTabId = null;
+      if (!openTabs.length) {
+        // Auto-create first chat for empty state
+        await newConversation();
+      } else {
+        renderTabs();
+        if (!activeTabId) activeTabId = openTabs[0];
+        await openConversation(activeTabId);
       }
-
-      openRunPane(skill);
-      $('#run-prompt').value = prompt || `/${skill.name}`;
-      $('#run-submit').classList.add('hidden');
-      $('#run-stop').classList.remove('hidden');
-      setRunStateTag('Reattaching');
-      setStatusDot('running');
-      currentRunId = runId;
-      attachStream(runId);
     }
 
     (async () => {
       bootBars();
       await loadSkills();
-      loadHistory();
-      maybeReattach();
+      bootChat();
     })();
   </script>
 </body>

@@ -10,6 +10,15 @@ import { readRuns, appendRun, appendTranscriptEvent, readTranscript, lastRunAtBy
 import { vaultChanges } from './lib/vault-changes.mjs';
 import { readUsage } from './lib/usage.mjs';
 import { ensureProjectDataDir, readConfig, writeConfig, pushRecent, describeProject, migrateLegacyData } from './lib/project.mjs';
+import {
+  ensureConvDir,
+  newConversationId,
+  appendConversationIndex,
+  readConversationIndex,
+  appendConversationEvent,
+  readConversationTranscript,
+  titleFromFirstMessage,
+} from './lib/conversations.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = join(__dirname, 'public');
@@ -46,6 +55,7 @@ export async function createApp(opts) {
     statsCachePath = join(homedir(), '.claude', 'stats-cache.json'),
     publicDir = PUBLIC_DIR,
     spawnRun = defaultSpawnRun,
+    spawnChat,
   } = opts;
 
   // Mutable so /api/project can swap projects at runtime. Handlers read from
@@ -60,6 +70,10 @@ export async function createApp(opts) {
   };
 
   const activeRuns = new Map(); // runId → { child, stdoutBuf, status, ... }
+  // Active chat conversations. Keyed by conversationId (= claude --session-id).
+  // Same shape as activeRuns: { child, eventListeners, subscribers, writeChain,
+  // dataDir, lineBuf, status, lastMessageAt }.
+  const activeConversations = new Map();
 
   const server = createServer(async (req, res) => {
     try {
@@ -272,7 +286,166 @@ export async function createApp(opts) {
         r.status = 'cancelled';
         return send(res, 200, { ok: true });
       }
-      // GET /api/runs/:id — Task 9
+      // ─── CONVERSATIONS (chat mode) ───────────────────────────────────────
+      if (method === 'GET' && url === '/api/conversations') {
+        return send(res, 200, await readConversationIndex(state.dataDir));
+      }
+      if (method === 'POST' && url === '/api/conversations') {
+        if (!spawnChat) return send(res, 500, { error: 'chat mode not configured' });
+        const conversationId = newConversationId();
+        const createdAt = new Date().toISOString();
+        await ensureConvDir(state.dataDir);
+        await appendConversationIndex(state.dataDir, {
+          conversationId, title: 'New chat', createdAt, lastMessageAt: createdAt,
+        });
+        // Spawn lazily on first message — don't burn a child for an empty chat
+        return send(res, 200, { conversationId, title: 'New chat', createdAt });
+      }
+      if (method === 'GET' && url.match(/^\/api\/conversations\/[^/]+$/)) {
+        const id = url.split('/').pop();
+        const transcript = await readConversationTranscript(state.dataDir, id);
+        const idx = await readConversationIndex(state.dataDir);
+        const meta = idx.find(c => c.conversationId === id);
+        if (!meta) return send(res, 404, { error: 'not found' });
+        const active = activeConversations.get(id);
+        return send(res, 200, { ...meta, transcript, isActive: !!active, status: active?.status || 'idle' });
+      }
+      if (method === 'POST' && url.match(/^\/api\/conversations\/[^/]+\/message$/)) {
+        if (!spawnChat) return send(res, 500, { error: 'chat mode not configured' });
+        const id = url.split('/')[3];
+        const body = await readBody(req);
+        let parsed;
+        try { parsed = JSON.parse(body || '{}'); } catch { return send(res, 400, { error: 'invalid json' }); }
+        const text = (parsed.text || '').toString();
+        if (!text.trim()) return send(res, 400, { error: 'text required' });
+
+        const idx = await readConversationIndex(state.dataDir);
+        const meta = idx.find(c => c.conversationId === id);
+        if (!meta) return send(res, 404, { error: 'conversation not found' });
+
+        let conv = activeConversations.get(id);
+        if (!conv) {
+          // Spawn (or resume) the child. Resume if there's already transcript on disk.
+          const transcript = await readConversationTranscript(state.dataDir, id);
+          const isResume = transcript.length > 0;
+          const convDataDir = state.dataDir;
+          const { child } = spawnChat({ projectDir: state.projectDir, sessionId: id, resume: isResume });
+          conv = {
+            child,
+            dataDir: convDataDir,
+            status: 'running',
+            lineBuf: '',
+            eventListeners: [],
+            subscribers: [],
+            writeChain: Promise.resolve(),
+            stdoutBuf: '',
+          };
+          activeConversations.set(id, conv);
+
+          child.on('error', (err) => {
+            const c = activeConversations.get(id);
+            if (!c) return;
+            c.status = 'error';
+            const errLine = JSON.stringify({ type: 'system', subtype: 'spawn_error', message: err.message });
+            for (const l of c.eventListeners) l(errLine);
+            for (const s of c.subscribers) try { s.end(); } catch {}
+            c.writeChain = c.writeChain.then(() => appendConversationEvent(convDataDir, id, JSON.parse(errLine))).catch(() => {});
+            activeConversations.delete(id);
+          });
+
+          child.stdout.on('data', (d) => {
+            const c = activeConversations.get(id);
+            if (!c) return;
+            const txt = d.toString('utf8');
+            c.stdoutBuf = (c.stdoutBuf + txt).slice(-1024 * 1024);
+            c.lineBuf += txt;
+            let nl;
+            while ((nl = c.lineBuf.indexOf('\n')) >= 0) {
+              const line = c.lineBuf.slice(0, nl).trim();
+              c.lineBuf = c.lineBuf.slice(nl + 1);
+              if (!line) continue;
+              for (const l of c.eventListeners) l(line);
+              let ev;
+              try { ev = JSON.parse(line); } catch { continue; }
+              c.writeChain = c.writeChain.then(() => appendConversationEvent(convDataDir, id, ev)).catch(() => {});
+            }
+          });
+
+          child.stderr.on('data', (d) => {
+            const c = activeConversations.get(id);
+            if (!c) return;
+            const errLine = JSON.stringify({ type: 'system', subtype: 'stderr', text: d.toString('utf8') });
+            for (const l of c.eventListeners) l(errLine);
+            c.writeChain = c.writeChain.then(() => appendConversationEvent(convDataDir, id, JSON.parse(errLine))).catch(() => {});
+          });
+
+          child.on('exit', (code) => {
+            const c = activeConversations.get(id);
+            if (!c) return;
+            c.status = code === 0 ? 'idle' : 'error';
+            for (const s of c.subscribers) setImmediate(() => { try { s.end(); } catch {} });
+            // Don't delete from map immediately — let next message resume.
+            // But the child is dead, so nuke the entry so next call re-spawns with --resume.
+            activeConversations.delete(id);
+          });
+        }
+
+        // Write user message to child stdin (JSON-Lines protocol)
+        const userMsg = { type: 'user', message: { role: 'user', content: text } };
+        try {
+          conv.child.stdin.write(JSON.stringify(userMsg) + '\n');
+        } catch (e) {
+          return send(res, 500, { error: 'write failed: ' + e.message });
+        }
+
+        // Bookkeeping: update title from first message + bump lastMessageAt
+        const lastMessageAt = new Date().toISOString();
+        const title = meta.title === 'New chat' ? titleFromFirstMessage(text) : meta.title;
+        await appendConversationIndex(state.dataDir, {
+          conversationId: id, title, createdAt: meta.createdAt, lastMessageAt,
+        });
+
+        return send(res, 200, { ok: true, lastMessageAt, title });
+      }
+      if (method === 'GET' && url.match(/^\/api\/conversations\/[^/]+\/stream$/)) {
+        const id = url.split('/')[3];
+        const conv = activeConversations.get(id);
+        res.writeHead(200, {
+          'content-type': 'text/event-stream',
+          'cache-control': 'no-cache',
+          'connection': 'keep-alive',
+          'x-accel-buffering': 'no',
+        });
+        res.flushHeaders();
+        if (!conv) {
+          // Inactive — just close after a hint event so client can fall back to /transcript
+          res.write(`data: ${JSON.stringify({ type: 'system', subtype: 'inactive' })}\n\n`);
+          res.end();
+          return;
+        }
+        // Replay buffered stdout, then live-stream
+        for (const line of conv.stdoutBuf.split('\n')) {
+          if (line.trim()) res.write(`data: ${line.trim()}\n\n`);
+        }
+        const listener = (line) => res.write(`data: ${line}\n\n`);
+        conv.eventListeners.push(listener);
+        conv.subscribers.push(res);
+        req.on('close', () => {
+          const cur = activeConversations.get(id);
+          if (!cur) return;
+          cur.eventListeners = cur.eventListeners.filter(l => l !== listener);
+          cur.subscribers = cur.subscribers.filter(s => s !== res);
+        });
+        return;
+      }
+      if (method === 'POST' && url.match(/^\/api\/conversations\/[^/]+\/cancel$/)) {
+        const id = url.split('/')[3];
+        const conv = activeConversations.get(id);
+        if (!conv) return send(res, 404, { error: 'not active' });
+        try { conv.child.kill('SIGTERM'); } catch {}
+        return send(res, 200, { ok: true });
+      }
+
       return serveStatic(req, res, publicDir);
     } catch (err) {
       send(res, 500, { error: err.message });
@@ -313,6 +486,29 @@ function makeSpawnRun(claudePath) {
       '--verbose', // required by claude when --output-format=stream-json + --print
       '--permission-mode', 'bypassPermissions',
     ], { cwd: projectDir, shell: useShell });
+    return { child };
+  };
+}
+
+// Chat-mode spawn: reads JSON-lines from stdin, writes JSON-lines to stdout.
+// We assign the session UUID up front so subsequent --resume works against
+// our internal id. --replay-user-messages echoes the user message back on
+// stdout, so the SSE consumer sees both halves of the conversation in one
+// stream and doesn't need to splice.
+export function makeSpawnChat(claudePath) {
+  const useShell = process.platform === 'win32';
+  return function spawnChat({ projectDir, sessionId, resume = false }) {
+    const args = [
+      '-p',
+      '--input-format', 'stream-json',
+      '--output-format', 'stream-json',
+      '--verbose',
+      '--replay-user-messages',
+      '--permission-mode', 'bypassPermissions',
+    ];
+    if (resume) args.push('--resume', sessionId);
+    else args.push('--session-id', sessionId);
+    const child = spawn(claudePath, args, { cwd: projectDir, shell: useShell, stdio: ['pipe', 'pipe', 'pipe'] });
     return { child };
   };
 }
@@ -387,7 +583,11 @@ async function main() {
   });
 
   const port = Number(process.env.PORT) || Number(args.port) || 3737;
-  const { server } = await createApp({ projectDir, dataDir, dataRoot, spawnRun: makeSpawnRun(claudePath) });
+  const { server } = await createApp({
+    projectDir, dataDir, dataRoot,
+    spawnRun: makeSpawnRun(claudePath),
+    spawnChat: makeSpawnChat(claudePath),
+  });
   server.listen(port, () => console.log(`Agentic OS listening on http://localhost:${port}  (project: ${projectDir}, claude: ${claudePath})`));
 }
 
