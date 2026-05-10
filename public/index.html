@@ -540,6 +540,73 @@
     }
     .conv-card .meta { font-size: 10px; color: var(--ink-ghost); }
 
+    /* Floating "new messages" pill — appears when user has scrolled away
+       from the bottom while a stream is dropping new content. */
+    .scroll-pill {
+      position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
+      font-family: 'JetBrains Mono', monospace; font-size: 11px;
+      letter-spacing: 0.06em; padding: 6px 14px;
+      background: var(--bg-elev); border: 1px solid var(--accent);
+      color: var(--accent); cursor: pointer; z-index: 5;
+      animation: fade-up 200ms ease-out;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.4);
+    }
+    .scroll-pill:hover { background: var(--accent-glow); }
+
+    /* Code-block copy button. Sits in the top-right of <pre>, revealed on hover. */
+    .markdown-text pre { position: relative; }
+    .copy-btn {
+      position: absolute; top: 6px; right: 6px;
+      font-family: 'JetBrains Mono', monospace; font-size: 10px;
+      letter-spacing: 0.06em; padding: 3px 8px;
+      background: var(--bg); border: 1px solid var(--edge-strong);
+      color: var(--ink-mute); cursor: pointer;
+      opacity: 0; transition: opacity 120ms ease, color 120ms ease;
+    }
+    .markdown-text pre:hover .copy-btn { opacity: 1; }
+    .copy-btn:hover { color: var(--accent); border-color: var(--accent); }
+    .copy-btn.is-copied { color: var(--phosphor); border-color: var(--phosphor); opacity: 1; }
+
+    /* Conversation card hover actions (rename / delete) */
+    .conv-card { position: relative; }
+    .conv-actions {
+      position: absolute; top: 8px; right: 8px; display: flex; gap: 4px;
+      opacity: 0; transition: opacity 120ms ease;
+    }
+    .conv-card:hover .conv-actions { opacity: 1; }
+    .conv-actions button {
+      background: var(--bg); border: 1px solid var(--edge-strong);
+      color: var(--ink-mute); cursor: pointer;
+      font-family: 'JetBrains Mono', monospace; font-size: 10px;
+      padding: 2px 6px;
+    }
+    .conv-actions button:hover { color: var(--accent); border-color: var(--accent); }
+    .conv-actions button.delete:hover { color: var(--err); border-color: var(--err); }
+    .conv-card .title-input {
+      width: 100%; background: var(--bg); border: 1px solid var(--accent);
+      color: var(--ink); font-family: 'Fraunces', serif; font-size: 14px;
+      padding: 2px 4px;
+    }
+
+    /* Empty-state hint shown in fresh chats */
+    .chat-empty {
+      max-width: 520px;
+      margin: 60px auto 0;
+      text-align: left;
+      color: var(--ink-mute);
+      font-family: 'JetBrains Mono', monospace; font-size: 12.5px;
+      line-height: 1.7;
+    }
+    .chat-empty h2 {
+      font-family: 'Fraunces', serif; font-weight: 400; font-size: 26px;
+      color: var(--ink); margin-bottom: 14px; letter-spacing: -0.01em;
+    }
+    .chat-empty .kbd {
+      display: inline-block; padding: 1px 6px; margin: 0 2px;
+      background: var(--bg-elev); border: 1px solid var(--edge-strong);
+      color: var(--accent); font-size: 11px;
+    }
+
     /* Markdown rendering inside assistant bubbles.
        Tuned for the editorial/operator vibe — Fraunces for headings, monospace
        for code, amber accent for inline code + links. */
@@ -644,8 +711,11 @@
         <!-- tabs populated by JS -->
         <button id="new-chat-btn" class="tab-new" title="New chat">+ new</button>
       </div>
-      <div id="chat-transcript" class="flex-1 overflow-y-auto px-8 py-6 transcript-chat">
-        <!-- messages rendered here -->
+      <div id="chat-transcript-wrap" class="flex-1 relative overflow-hidden">
+        <div id="chat-transcript" class="absolute inset-0 overflow-y-auto px-8 py-6 transcript-chat">
+          <!-- messages rendered here -->
+        </div>
+        <button id="scroll-pill" type="button" class="scroll-pill hidden">↓ new messages</button>
       </div>
       <form id="composer" class="border-t border-edge px-6 py-4 flex flex-col gap-2 bg-bg">
         <textarea id="composer-input" rows="2" class="prompt-input" placeholder="Message Claude — / for skills · @ for files" autocomplete="off"></textarea>
@@ -721,6 +791,32 @@
     function renderMarkdown(text) {
       const html = marked.parse(String(text || ''));
       return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
+    }
+
+    // Add a copy-to-clipboard button to every <pre> code block that doesn't
+    // have one yet. Runs after each markdown render. The button text flips
+    // to "copied" for 1.5s then snaps back.
+    function enhanceCodeBlocks(root) {
+      root.querySelectorAll('pre').forEach(pre => {
+        if (pre.querySelector('.copy-btn')) return;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'copy-btn';
+        btn.textContent = 'copy';
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const code = pre.querySelector('code')?.textContent ?? pre.textContent;
+          try {
+            await navigator.clipboard.writeText(code);
+            btn.textContent = 'copied';
+            btn.classList.add('is-copied');
+            setTimeout(() => { btn.textContent = 'copy'; btn.classList.remove('is-copied'); }, 1500);
+          } catch {
+            btn.textContent = 'error';
+          }
+        });
+        pre.appendChild(btn);
+      });
     }
 
     const $ = (sel) => document.querySelector(sel);
@@ -918,6 +1014,34 @@
       $('#composer-status').textContent = text || 'idle';
     }
 
+    // ─── Auto-scroll lock ──────────────────────────────────────────────
+    // If the user has scrolled away from the bottom (>80px gap), pause
+    // auto-scroll and show a "↓ new messages" pill. Click pill → snap down.
+    const SCROLL_NEAR_BOTTOM_THRESHOLD = 80;
+    let userScrolledAway = false;
+
+    function isNearBottom() {
+      const el = $('#chat-transcript');
+      return el.scrollHeight - el.scrollTop - el.clientHeight < SCROLL_NEAR_BOTTOM_THRESHOLD;
+    }
+
+    function maybeAutoScroll() {
+      const el = $('#chat-transcript');
+      if (userScrolledAway) {
+        $('#scroll-pill').classList.remove('hidden');
+      } else {
+        el.scrollTop = el.scrollHeight;
+        $('#scroll-pill').classList.add('hidden');
+      }
+    }
+
+    function snapToBottom() {
+      const el = $('#chat-transcript');
+      el.scrollTop = el.scrollHeight;
+      userScrolledAway = false;
+      $('#scroll-pill').classList.add('hidden');
+    }
+
     // Skill click → insert /skill-name into composer (no run pane anymore)
     document.addEventListener('click', (e) => {
       const card = e.target.closest('.skill-card');
@@ -978,11 +1102,68 @@
         return;
       }
       target.innerHTML = convs.map(c => `
-        <button type="button" class="conv-card ${c.conversationId === activeTabId ? 'is-active' : ''}" data-conv-id="${escapeHtml(c.conversationId)}">
+        <div class="conv-card ${c.conversationId === activeTabId ? 'is-active' : ''}" data-conv-id="${escapeHtml(c.conversationId)}" tabindex="0" role="button">
           <span class="title">${escapeHtml(c.title || 'New chat')}</span>
           <span class="meta">${relativeTime(c.lastMessageAt || c.createdAt)}</span>
-        </button>
+          <span class="conv-actions">
+            <button type="button" class="rename" data-action="rename" title="Rename">✎</button>
+            <button type="button" class="delete" data-action="delete" title="Delete">×</button>
+          </span>
+        </div>
       `).join('');
+    }
+
+    async function renameConversation(id, currentTitle) {
+      const card = $(`.conv-card[data-conv-id="${CSS.escape(id)}"]`);
+      if (!card) return;
+      // Swap title span for an input field; commit on blur or Enter
+      const titleEl = card.querySelector('.title');
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'title-input';
+      input.value = currentTitle || '';
+      titleEl.replaceWith(input);
+      input.focus();
+      input.select();
+      const commit = async () => {
+        const next = input.value.trim();
+        if (!next || next === currentTitle) return loadConversations();
+        try {
+          await fetch(`/api/conversations/${id}`, {
+            method: 'PATCH', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ title: next }),
+          });
+          // Update local cache so tabs show new title immediately
+          const meta = conversationsCache.get(id);
+          if (meta) conversationsCache.set(id, { ...meta, title: next });
+        } catch {}
+        await loadConversations();
+        renderTabs();
+      };
+      input.addEventListener('blur', commit, { once: true });
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+        if (e.key === 'Escape') { input.value = currentTitle; input.blur(); }
+      });
+    }
+
+    async function deleteConversation(id) {
+      const meta = conversationsCache.get(id);
+      const label = meta?.title || 'this chat';
+      if (!confirm(`Delete "${label}"? This can't be undone.`)) return;
+      try {
+        await fetch(`/api/conversations/${id}`, { method: 'DELETE' });
+      } catch {}
+      conversationsCache.delete(id);
+      openTabs = openTabs.filter(t => t !== id);
+      if (activeTabId === id) {
+        activeTabId = openTabs[openTabs.length - 1] || null;
+        if (activeTabId) await openConversation(activeTabId);
+        else $('#chat-transcript').innerHTML = renderEmptyState();
+      }
+      saveTabs();
+      renderTabs();
+      await loadConversations();
     }
 
     function renderTabs() {
@@ -1021,9 +1202,16 @@
         // Update cache with fresh meta
         conversationsCache.set(id, { conversationId: id, title: data.title, createdAt: data.createdAt, lastMessageAt: data.lastMessageAt, permissionMode: data.permissionMode });
         renderPermissionChip(data.permissionMode);
-        for (const ev of data.transcript || []) renderChatEvent(ev, transcript);
+        const meaningfulEvents = (data.transcript || []).filter(e => ['user', 'assistant', 'result'].includes(e.type));
+        if (meaningfulEvents.length === 0 && !data.isActive) {
+          transcript.innerHTML = renderEmptyState();
+        } else {
+          for (const ev of data.transcript || []) renderChatEvent(ev, transcript);
+        }
         if (data.isActive) attachChatStream(id);
         setComposerStatus(data.isActive ? 'streaming…' : 'idle');
+        userScrolledAway = false;
+        snapToBottom();
       } catch (e) {
         transcript.innerHTML = `<div class="chat-msg system">Failed to load: ${escapeHtml(e.message)}</div>`;
       }
@@ -1039,11 +1227,13 @@
         if (ev.type === 'system' && ev.subtype === 'inactive') {
           currentChatES.close(); currentChatES = null;
           setComposerStatus('idle');
+          setStatusDot(null);
           return;
         }
         renderChatEvent(ev, transcript);
         if (ev.type === 'result') {
           setComposerStatus('idle');
+          setStatusDot(ev.subtype === 'success' ? 'ok' : 'err');
           $('#chat-cancel').classList.add('hidden');
           loadConversations(); // refresh sidebar lastMessageAt
         }
@@ -1051,6 +1241,7 @@
       currentChatES.onerror = () => {
         currentChatES.close(); currentChatES = null;
         setComposerStatus('idle');
+        setStatusDot(null);
         $('#chat-cancel').classList.add('hidden');
       };
     }
@@ -1078,7 +1269,12 @@
       if (!text || !activeTabId) return;
       input.value = '';
       setComposerStatus('thinking…');
+      setStatusDot('running');
       $('#chat-cancel').classList.remove('hidden');
+      // User just sent a message — clear empty state, snap to bottom, reset lock
+      const emptyEl = $('#chat-transcript').querySelector('.chat-empty');
+      if (emptyEl) emptyEl.remove();
+      userScrolledAway = false;
 
       // Optimistic user-message render before server confirms
       const transcript = $('#chat-transcript');
@@ -1086,7 +1282,7 @@
       userBubble.className = 'chat-msg user';
       userBubble.innerHTML = `<div class="role">you</div><div class="body">${escapeHtml(text)}</div>`;
       transcript.appendChild(userBubble);
-      transcript.scrollTop = transcript.scrollHeight;
+      maybeAutoScroll();
 
       try {
         const r = await fetch(`/api/conversations/${activeTabId}/message`, {
@@ -1116,7 +1312,7 @@
         span.className = 'chat-msg system';
         span.textContent = `── ${event.subtype || 'system'}${event.message ? ': ' + event.message : ''}`;
         container.appendChild(span);
-        container.scrollTop = container.scrollHeight;
+        maybeAutoScroll();
         return;
       }
       if (event.type === 'user' && event.message?.content) {
@@ -1155,7 +1351,7 @@
             }
           }
         }
-        container.scrollTop = container.scrollHeight;
+        maybeAutoScroll();
         return;
       }
       if (event.type === 'stream_event' && event.event) {
@@ -1168,7 +1364,7 @@
           bubble.className = 'chat-msg assistant streaming';
           bubble.innerHTML = `<div class="role">claude</div><div class="body"></div>`;
           container.appendChild(bubble);
-          container.scrollTop = container.scrollHeight;
+          maybeAutoScroll();
         } else if (ev.type === 'content_block_start') {
           const bubble = container.querySelector('.chat-msg.assistant.streaming');
           if (!bubble) return;
@@ -1209,11 +1405,12 @@
             if (div) {
               div.dataset.rawText = (div.dataset.rawText || '') + ev.delta.text;
               div.innerHTML = renderMarkdown(div.dataset.rawText);
+              enhanceCodeBlocks(div);
             }
           }
           // input_json_delta is partial JSON for tool args — we wait for the
           // final assistant event for tool args (simpler than streaming JSON parse).
-          container.scrollTop = container.scrollHeight;
+          maybeAutoScroll();
         } else if (ev.type === 'message_stop') {
           // Bubble is done streaming
           container.querySelectorAll('.chat-msg.assistant.streaming').forEach(el => el.classList.remove('streaming'));
@@ -1239,7 +1436,7 @@
               }
             }
           }
-          container.scrollTop = container.scrollHeight;
+          maybeAutoScroll();
           return;
         }
         // No streaming bubble (e.g. transcript replay without partials) — render fresh
@@ -1254,6 +1451,7 @@
             div.className = 'markdown-text';
             div.dataset.rawText = block.text;
             div.innerHTML = renderMarkdown(block.text);
+            enhanceCodeBlocks(div);
             body.appendChild(div);
           } else if (block.type === 'tool_use') {
             const det = document.createElement('details');
@@ -1272,7 +1470,7 @@
             body.appendChild(det);
           }
         }
-        container.scrollTop = container.scrollHeight;
+        maybeAutoScroll();
         return;
       }
       if (event.type === 'result') {
@@ -1285,7 +1483,7 @@
           div.textContent = `[${subtype}]`;
           container.appendChild(div);
         }
-        container.scrollTop = container.scrollHeight;
+        maybeAutoScroll();
         return;
       }
       // Unknown
@@ -1432,11 +1630,39 @@
       if (tab) openConversation(tab.dataset.convId);
     });
 
-    // Conversation sidebar click
+    // Conversation sidebar click — distinguish action buttons from card body
     $('#conv-list').addEventListener('click', (e) => {
+      const action = e.target.closest('[data-action]');
       const card = e.target.closest('.conv-card');
-      if (card) openConversation(card.dataset.convId);
+      if (!card) return;
+      const id = card.dataset.convId;
+      if (action) {
+        e.stopPropagation();
+        if (action.dataset.action === 'rename') {
+          const meta = conversationsCache.get(id);
+          renameConversation(id, meta?.title || '');
+        } else if (action.dataset.action === 'delete') {
+          deleteConversation(id);
+        }
+        return;
+      }
+      openConversation(id);
     });
+
+    function renderEmptyState() {
+      return `
+        <div class="chat-empty">
+          <h2>Hey. What are we building?</h2>
+          <p>This conversation is fresh. A few hints to get going:</p>
+          <ul>
+            <li>Type your prompt below — Claude streams the reply as it thinks.</li>
+            <li>Hit <span class="kbd">/</span> to search every installed skill, then Tab to insert.</li>
+            <li>Hit <span class="kbd">@</span> to fuzzy-search files in this project; Claude reads them natively.</li>
+            <li>The chip at the bottom-left controls permissions — click to cycle.</li>
+          </ul>
+        </div>
+      `;
+    }
 
     $('#skill-search').addEventListener('input', (e) => {
       const q = e.target.value.trim().toLowerCase();
@@ -1446,6 +1672,12 @@
       );
       renderSkills(filtered);
     });
+
+    $('#chat-transcript').addEventListener('scroll', () => {
+      userScrolledAway = !isNearBottom();
+      if (!userScrolledAway) $('#scroll-pill').classList.add('hidden');
+    });
+    $('#scroll-pill').addEventListener('click', snapToBottom);
 
     async function bootChat() {
       loadTabs();

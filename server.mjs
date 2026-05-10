@@ -323,19 +323,38 @@ export async function createApp(opts) {
         const idx = await readConversationIndex(state.dataDir);
         const meta = idx.find(c => c.conversationId === id);
         if (!meta) return send(res, 404, { error: 'not found' });
-        // Right now only permissionMode is patchable; changing it requires restarting
-        // any in-flight child so the new mode takes effect on the next turn.
+        // Patchable fields: permissionMode (kills child so next message respawns
+        // with the new mode), title (display only).
+        let updated = { ...meta };
         if (parsed.permissionMode !== undefined) {
-          const next = normalizePermissionMode(parsed.permissionMode);
-          await appendConversationIndex(state.dataDir, { ...meta, permissionMode: next });
+          updated.permissionMode = normalizePermissionMode(parsed.permissionMode);
           const conv = activeConversations.get(id);
-          if (conv) {
-            try { conv.child.kill('SIGTERM'); } catch {}
-            // exit handler clears from activeConversations; next message respawns with new mode
-          }
-          return send(res, 200, { conversationId: id, permissionMode: next });
+          if (conv) { try { conv.child.kill('SIGTERM'); } catch {} }
         }
-        return send(res, 400, { error: 'no patchable fields' });
+        if (parsed.title !== undefined) {
+          const t = String(parsed.title).trim().slice(0, 100);
+          if (t) updated.title = t;
+        }
+        if (updated === meta) return send(res, 400, { error: 'no patchable fields' });
+        await appendConversationIndex(state.dataDir, updated);
+        return send(res, 200, updated);
+      }
+      if (method === 'DELETE' && url.match(/^\/api\/conversations\/[^/]+$/)) {
+        const id = url.split('/').pop();
+        const idx = await readConversationIndex(state.dataDir);
+        const meta = idx.find(c => c.conversationId === id);
+        if (!meta) return send(res, 404, { error: 'not found' });
+        // Tombstone the entry by appending a deleted flag — readConversationIndex
+        // collapses by id (last write wins) and skips deleted ones below.
+        await appendConversationIndex(state.dataDir, { ...meta, deleted: true });
+        // Kill any active child + drop transcript file
+        const conv = activeConversations.get(id);
+        if (conv) { try { conv.child.kill('SIGTERM'); } catch {} }
+        try {
+          const { unlink } = await import('node:fs/promises');
+          await unlink(join(state.dataDir, 'conversations', `${id}.jsonl`));
+        } catch {}
+        return send(res, 200, { ok: true });
       }
       if (method === 'GET' && url.match(/^\/api\/conversations\/[^/]+$/)) {
         const id = url.split('/').pop();

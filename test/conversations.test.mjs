@@ -249,6 +249,72 @@ test('PATCH /api/conversations/:id updates permissionMode and is forwarded to sp
   await rm(dataRoot, { recursive: true, force: true });
 });
 
+test('PATCH /api/conversations/:id can rename title', async () => {
+  const projectDir = await mkdtemp(join(tmpdir(), 'prn-'));
+  const dataRoot = await mkdtemp(join(tmpdir(), 'drn-'));
+  const app = await createApp({
+    projectDir, dataDir: join(dataRoot, 'projects', 'x'), dataRoot,
+    userSkillsDir: '/no', pluginsDir: '/no', statsCachePath: '/no',
+    spawnRun: () => { throw new Error('unused'); },
+    spawnChat: () => ({ child: fakeChat() }),
+  });
+  await new Promise(r => app.server.listen(0, r));
+  const { port } = app.server.address();
+  const base = `http://localhost:${port}`;
+
+  const { conversationId } = await (await fetch(`${base}/api/conversations`, { method: 'POST', body: '{}', headers: { 'content-type': 'application/json' } })).json();
+  const r = await fetch(`${base}/api/conversations/${conversationId}`, {
+    method: 'PATCH', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ title: 'My renamed chat' }),
+  });
+  assert.equal(r.status, 200);
+  const body = await r.json();
+  assert.equal(body.title, 'My renamed chat');
+
+  // Verify the rename is visible in the list
+  const list = await (await fetch(`${base}/api/conversations`)).json();
+  assert.equal(list[0].title, 'My renamed chat');
+
+  await new Promise(r => app.server.close(r));
+  await rm(projectDir, { recursive: true, force: true });
+  await rm(dataRoot, { recursive: true, force: true });
+});
+
+test('DELETE /api/conversations/:id tombstones + hides from list', async () => {
+  const projectDir = await mkdtemp(join(tmpdir(), 'pdel-'));
+  const dataRoot = await mkdtemp(join(tmpdir(), 'ddel-'));
+  const app = await createApp({
+    projectDir, dataDir: join(dataRoot, 'projects', 'x'), dataRoot,
+    userSkillsDir: '/no', pluginsDir: '/no', statsCachePath: '/no',
+    spawnRun: () => { throw new Error('unused'); },
+    spawnChat: () => ({ child: fakeChat() }),
+  });
+  await new Promise(r => app.server.listen(0, r));
+  const { port } = app.server.address();
+  const base = `http://localhost:${port}`;
+
+  const { conversationId: a } = await (await fetch(`${base}/api/conversations`, { method: 'POST', body: '{}', headers: { 'content-type': 'application/json' } })).json();
+  const { conversationId: b } = await (await fetch(`${base}/api/conversations`, { method: 'POST', body: '{}', headers: { 'content-type': 'application/json' } })).json();
+
+  let list = await (await fetch(`${base}/api/conversations`)).json();
+  assert.equal(list.length, 2);
+
+  const r = await fetch(`${base}/api/conversations/${a}`, { method: 'DELETE' });
+  assert.equal(r.status, 200);
+
+  list = await (await fetch(`${base}/api/conversations`)).json();
+  assert.equal(list.length, 1);
+  assert.equal(list[0].conversationId, b);
+
+  // Also verify GET on the deleted one returns 404
+  const r2 = await fetch(`${base}/api/conversations/${a}`);
+  assert.equal(r2.status, 404);
+
+  await new Promise(r => app.server.close(r));
+  await rm(projectDir, { recursive: true, force: true });
+  await rm(dataRoot, { recursive: true, force: true });
+});
+
 test('POST /message rejects empty text and unknown conversationId', async () => {
   const projectDir = await mkdtemp(join(tmpdir(), 'pchat4-'));
   const dataRoot = await mkdtemp(join(tmpdir(), 'dchat4-'));
