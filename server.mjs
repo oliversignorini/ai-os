@@ -52,6 +52,8 @@ export async function createApp(opts) {
     // Plugin-installed skill scanning is a v1.x improvement (deep glob into pluginsDir).
   ];
 
+  const activeRuns = new Map(); // runId → { child, stdoutBuf, status, ... }
+
   const server = createServer(async (req, res) => {
     try {
       const { method, url } = req;
@@ -71,7 +73,36 @@ export async function createApp(opts) {
       if (method === 'GET' && url === '/api/usage') {
         return send(res, 200, await readUsage(statsCachePath));
       }
-      // POST /api/run, GET /api/runs/:id, GET /api/runs/:id/stream, POST /api/runs/:id/cancel — Tasks 6-9
+      if (method === 'POST' && url === '/api/run') {
+        const body = await readBody(req);
+        const { skillId, prompt } = JSON.parse(body || '{}');
+        if (!skillId || !prompt) return send(res, 400, { error: 'skillId and prompt required' });
+
+        const skills = await scanSkillDirs(skillSources);
+        const skill = skills.find(s => s.id === skillId);
+        if (!skill) return send(res, 404, { error: 'skill not found' });
+
+        const runId = 'r-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+        const startedAt = new Date().toISOString();
+        const { child } = spawnRun({ skillName: skill.name, prompt, projectDir });
+
+        activeRuns.set(runId, {
+          child, startedAt, skillId, prompt,
+          status: 'running',
+          stdoutBuf: '',
+          eventListeners: [],
+          finalEvents: null,
+        });
+
+        child.stdout.on('data', (d) => {
+          const r = activeRuns.get(runId);
+          if (!r) return;
+          r.stdoutBuf = (r.stdoutBuf + d.toString('utf8')).slice(-1024 * 1024);
+        });
+
+        return send(res, 200, { runId });
+      }
+      // GET /api/runs/:id, GET /api/runs/:id/stream, POST /api/runs/:id/cancel — Tasks 7-9
       return serveStatic(req, res, publicDir);
     } catch (err) {
       send(res, 500, { error: err.message });
@@ -79,6 +110,15 @@ export async function createApp(opts) {
   });
 
   return { server, opts };
+}
+
+function readBody(req) {
+  return new Promise((resolve, reject) => {
+    let body = '';
+    req.on('data', (c) => body += c);
+    req.on('end', () => resolve(body));
+    req.on('error', reject);
+  });
 }
 
 function defaultSpawnRun({ skillName, prompt, projectDir }) {
