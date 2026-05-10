@@ -10,6 +10,7 @@ import { readRuns, appendRun, appendTranscriptEvent, readTranscript, lastRunAtBy
 import { vaultChanges } from './lib/vault-changes.mjs';
 import { readUsage } from './lib/usage.mjs';
 import { ensureProjectDataDir, readConfig, writeConfig, pushRecent, describeProject, migrateLegacyData } from './lib/project.mjs';
+import { listProjectFiles } from './lib/files.mjs';
 import {
   ensureConvDir,
   newConversationId,
@@ -100,6 +101,12 @@ export async function createApp(opts) {
       }
       if (method === 'GET' && url === '/api/usage') {
         return send(res, 200, await readUsage(statsCachePath));
+      }
+      if (method === 'GET' && url.startsWith('/api/files')) {
+        const u = new URL(url, 'http://localhost');
+        const query = u.searchParams.get('q') || '';
+        const files = await listProjectFiles(state.projectDir, { query });
+        return send(res, 200, files);
       }
       if (method === 'GET' && url === '/api/project') {
         const cfg = await readConfig(state.dataRoot);

@@ -593,7 +593,7 @@
         <!-- messages rendered here -->
       </div>
       <form id="composer" class="border-t border-edge px-6 py-4 flex flex-col gap-2 bg-bg">
-        <textarea id="composer-input" rows="2" class="prompt-input" placeholder="Message Claude — / for skills" autocomplete="off"></textarea>
+        <textarea id="composer-input" rows="2" class="prompt-input" placeholder="Message Claude — / for skills · @ for files" autocomplete="off"></textarea>
         <div class="flex items-center justify-between">
           <div class="flex items-center gap-3">
             <span id="composer-status" class="label" style="color:var(--ink-ghost);">idle</span>
@@ -1226,32 +1226,70 @@
       return k ? `${k}: …` : '';
     }
 
-    // Skill autocomplete in composer (triggered by /)
+    // Composer autocomplete — / for skills (synchronous, in-memory) or
+    // @ for files (async fetch from server). Single dropdown, two modes.
     let acIndex = -1;
     let acMatches = [];
-    function updateAutocomplete() {
+    let acMode = null; // 'skill' | 'file'
+    let acFetchToken = 0;
+
+    async function updateAutocomplete() {
       const input = $('#composer-input');
       const v = input.value;
-      const m = v.match(/(?:^|\s)\/([\w:-]*)$/);
       const ac = $('#skill-autocomplete');
-      if (!m) { ac.classList.add('hidden'); acMatches = []; return; }
-      const q = m[1].toLowerCase();
-      acMatches = allSkills
-        .filter(s => s.name.toLowerCase().includes(q))
-        .slice(0, 8);
-      if (!acMatches.length) { ac.classList.add('hidden'); return; }
-      acIndex = 0;
-      ac.innerHTML = acMatches.map((s, i) => `
-        <div class="item ${i === 0 ? 'is-active' : ''}" data-name="${escapeHtml(s.name)}">
-          /${escapeHtml(s.name)}
-          <div class="desc">${escapeHtml(s.description.slice(0, 80))}</div>
-        </div>
-      `).join('');
-      ac.classList.remove('hidden');
+      const skillMatch = v.match(/(?:^|\s)\/([\w:-]*)$/);
+      const fileMatch = v.match(/(?:^|\s)@([\w./:_-]*)$/);
+
+      if (skillMatch) {
+        acMode = 'skill';
+        const q = skillMatch[1].toLowerCase();
+        acMatches = allSkills.filter(s => s.name.toLowerCase().includes(q)).slice(0, 8);
+        if (!acMatches.length) { ac.classList.add('hidden'); return; }
+        acIndex = 0;
+        ac.innerHTML = acMatches.map((s, i) => `
+          <div class="item ${i === 0 ? 'is-active' : ''}" data-value="${escapeHtml(s.name)}">
+            /${escapeHtml(s.name)}
+            <div class="desc">${escapeHtml(s.description.slice(0, 80))}</div>
+          </div>
+        `).join('');
+        ac.classList.remove('hidden');
+        return;
+      }
+
+      if (fileMatch) {
+        acMode = 'file';
+        const q = fileMatch[1];
+        const token = ++acFetchToken;
+        try {
+          const files = await fetchJson(`/api/files?q=${encodeURIComponent(q)}`);
+          if (token !== acFetchToken) return; // a newer query superseded us
+          acMatches = files.slice(0, 8).map(p => ({ name: p }));
+          if (!acMatches.length) { ac.classList.add('hidden'); return; }
+          acIndex = 0;
+          ac.innerHTML = acMatches.map((f, i) => `
+            <div class="item ${i === 0 ? 'is-active' : ''}" data-value="${escapeHtml(f.name)}">
+              @${escapeHtml(f.name)}
+            </div>
+          `).join('');
+          ac.classList.remove('hidden');
+        } catch {
+          ac.classList.add('hidden');
+        }
+        return;
+      }
+
+      ac.classList.add('hidden');
+      acMatches = [];
+      acMode = null;
     }
-    function applyAutocomplete(name) {
+
+    function applyAutocomplete(value) {
       const input = $('#composer-input');
-      input.value = input.value.replace(/(?:^|\s)\/([\w:-]*)$/, (m, p) => m.replace('/' + p, '/' + name + ' '));
+      if (acMode === 'skill') {
+        input.value = input.value.replace(/(?:^|\s)\/([\w:-]*)$/, (m, p) => m.replace('/' + p, '/' + value + ' '));
+      } else if (acMode === 'file') {
+        input.value = input.value.replace(/(?:^|\s)@([\w./:_-]*)$/, (m, p) => m.replace('@' + p, '@' + value + ' '));
+      }
       $('#skill-autocomplete').classList.add('hidden');
       input.focus();
     }
@@ -1271,7 +1309,7 @@
       } else if (acVisible && (e.key === 'Tab' || e.key === 'Enter') && acMatches[acIndex]) {
         e.preventDefault();
         applyAutocomplete(acMatches[acIndex].name);
-      } else if (e.key === 'Escape' && acVisible) {
+      } else if (acVisible && e.key === 'Escape') {
         ac.classList.add('hidden');
       } else if (e.key === 'Enter' && !e.shiftKey && !acVisible) {
         e.preventDefault();
@@ -1280,7 +1318,7 @@
     });
     $('#skill-autocomplete').addEventListener('mousedown', (e) => {
       const item = e.target.closest('.item');
-      if (item) { e.preventDefault(); applyAutocomplete(item.dataset.name); }
+      if (item) { e.preventDefault(); applyAutocomplete(item.dataset.value); }
     });
 
     $('#composer').addEventListener('submit', (e) => { e.preventDefault(); sendMessage(); });

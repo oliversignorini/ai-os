@@ -15,7 +15,7 @@ Agentic OS is that surface. It spawns the same `claude` CLI you already have ins
 - **Multi-turn chat** with token-by-token streaming — feels like the real thing because it *is* the real thing.
 - **Tabs + persistent conversations** — every chat is saved as JSONL on disk under `data/projects/<hash>/conversations/`. Refresh the page, your chat is still there. Resumable across server restarts via `claude --resume`.
 - **Per-project workspaces** — click the wordmark in the top-left to switch projects. Each project gets its own conversation history, skill scope, and vault-changes feed.
-- **Skill autocomplete** — type `/` in the composer to fuzzy-search every skill installed in `~/.claude/skills` and across all your installed plugins (175+ in a typical setup). Tab to insert.
+- **Skill + file autocomplete** — type `/` to fuzzy-search every skill installed in `~/.claude/skills` and across your installed plugins (175+ in a typical setup). Type `@` to fuzzy-search files in the active project. Tab to insert. Claude reads `@path` mentions natively.
 - **Permission chip** — every conversation has a permission mode (`acceptEdits` by default, `bypassPermissions`, or `plan`). Click to cycle. Mode is persisted per chat and forwarded to the CLI.
 - **Vault changes ticker** — bottom bar shows `git log` activity in your project from the last 24h, so you can see what Claude did at a glance.
 - **Real Claude usage stats** in the topbar (5h + weekly percentage), sourced from the local stats cache.
@@ -85,7 +85,7 @@ npm test    # Run the test suite (node --test, no extra deps)
 npm start   # Boot the server
 ```
 
-Tests live in `test/*.test.mjs`. There are 59 of them covering the skill scanner, plugin dedup, project switcher, conversation lifecycle, permission modes, and SSE streaming. Run them before sending a PR.
+Tests live in `test/*.test.mjs`. There are 65 of them covering the skill scanner, plugin dedup, project switcher, conversation lifecycle, permission modes, file search, and SSE streaming. Run them before sending a PR.
 
 ## License
 
