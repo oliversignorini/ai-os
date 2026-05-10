@@ -4,7 +4,6 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "node server-stub.mjs",
     "start": "node server.mjs --project .",
     "test": "node --test \"test/**/*.test.mjs\""
   },

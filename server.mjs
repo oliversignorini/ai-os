@@ -217,13 +217,43 @@ function readBody(req) {
   });
 }
 
+function makeSpawnRun(claudePath) {
+  return function spawnRun({ skillName, prompt, projectDir }) {
+    const child = spawn(claudePath, [
+      '-p', prompt,
+      '--output-format', 'stream-json',
+      '--permission-mode', 'bypassPermissions',
+    ], { cwd: projectDir });
+    return { child };
+  };
+}
+
+// Default factory used in non-test environments where boot has resolved the path.
 function defaultSpawnRun({ skillName, prompt, projectDir }) {
+  // Last-resort: use shell:true so PATH lookup works. Args quoted via spawn array form.
   const child = spawn('claude', [
     '-p', prompt,
     '--output-format', 'stream-json',
     '--permission-mode', 'bypassPermissions',
-  ], { cwd: projectDir });
+  ], { cwd: projectDir, shell: process.platform === 'win32' });
   return { child };
+}
+
+function findClaudeOnPath() {
+  return new Promise((resolve, reject) => {
+    const cmd = process.platform === 'win32' ? 'where' : 'which';
+    const child = spawn(cmd, ['claude']);
+    let stdout = '';
+    child.stdout.on('data', d => stdout += d);
+    child.on('error', () => reject(new Error('`claude` CLI not found on PATH. Install Claude Code first.')));
+    child.on('exit', (code) => {
+      if (code !== 0) return reject(new Error('`claude` CLI not found on PATH. Install Claude Code first.'));
+      // `where` may return multiple paths (one per line) — take the first non-empty.
+      const path = stdout.split(/\r?\n/).map(s => s.trim()).find(Boolean);
+      if (!path) return reject(new Error('`claude` CLI path could not be resolved'));
+      resolve(path);
+    });
+  });
 }
 
 if (process.argv[1] && process.argv[1].endsWith('server.mjs')) {
@@ -238,20 +268,22 @@ async function main() {
     process.exit(1);
   }
 
-  await new Promise((res, rej) => {
-    const child = spawn('claude', ['--version']);
-    child.on('error', () => rej(new Error('`claude` CLI not found on PATH. Install Claude Code first.')));
-    child.on('exit', (code) => code === 0 ? res() : rej(new Error('`claude --version` failed')));
-  }).catch((err) => { console.error(err.message); process.exit(1); });
+  let claudePath;
+  try {
+    claudePath = await findClaudeOnPath();
+  } catch (err) {
+    console.error(err.message);
+    process.exit(1);
+  }
 
   const dataDir = join(__dirname, 'data');
   await mkdir(dataDir, { recursive: true });
 
-  await writeFile(join(dataDir, 'config.json'), JSON.stringify({ lastProject: projectDir }, null, 2));
+  await writeFile(join(dataDir, 'config.json'), JSON.stringify({ lastProject: projectDir, claudePath }, null, 2));
 
   const port = Number(process.env.PORT) || Number(args.port) || 3737;
-  const { server } = await createApp({ projectDir, dataDir });
-  server.listen(port, () => console.log(`Agentic OS listening on http://localhost:${port}  (project: ${projectDir})`));
+  const { server } = await createApp({ projectDir, dataDir, spawnRun: makeSpawnRun(claudePath) });
+  server.listen(port, () => console.log(`Agentic OS listening on http://localhost:${port}  (project: ${projectDir}, claude: ${claudePath})`));
 }
 
 function parseArgs(argv) {
