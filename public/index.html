@@ -214,9 +214,65 @@
     }
 
     function attachStream(runId) {
-      // Streaming logic added in Task 8.
-      $('#run-transcript').textContent = `[run ${runId} started — streaming not yet wired]`;
+      if (currentEventSource) currentEventSource.close();
+      const transcript = $('#run-transcript');
+      transcript.textContent = '';
+
+      currentEventSource = new EventSource(`/api/runs/${runId}/stream`);
+
+      currentEventSource.onmessage = (e) => {
+        let event;
+        try { event = JSON.parse(e.data); } catch { return; }
+        renderEvent(event, transcript);
+      };
+
+      currentEventSource.onerror = () => {
+        // SSE close from server fires onerror in some browsers — close gracefully
+        currentEventSource.close();
+        onRunComplete();
+      };
     }
+
+    function onRunComplete() {
+      $('#run-submit').classList.remove('hidden');
+      $('#run-stop').classList.add('hidden');
+      loadHistory(); // added in Task 11; safe no-op until then
+    }
+
+    function renderEvent(event, container) {
+      if (event.type === 'system') {
+        appendBlock(container, `--- ${event.subtype || 'system'} ---\n`, 'text-zinc-500');
+        return;
+      }
+      if (event.type === 'result') {
+        appendBlock(container, `\n--- ${event.subtype || 'result'} (exit ${event.exit_code}) ---\n`, 'text-zinc-500');
+        onRunComplete();
+        return;
+      }
+      if (event.type === 'assistant' && event.message?.content) {
+        for (const block of event.message.content) {
+          if (block.type === 'text') {
+            appendBlock(container, block.text, 'text-zinc-100');
+          }
+          // tool_use handled in Task 9
+        }
+        return;
+      }
+      // user / tool_result handled in Task 9
+      // fallthrough: render unknown events as raw JSON
+      appendBlock(container, `[unknown event: ${event.type}]\n`, 'text-zinc-600');
+    }
+
+    function appendBlock(container, text, klass = '') {
+      const span = document.createElement('span');
+      if (klass) span.className = klass;
+      span.textContent = text;
+      container.appendChild(span);
+      container.scrollTop = container.scrollHeight;
+    }
+
+    // Stub for loadHistory until Task 11 wires it
+    function loadHistory() {}
 
     $('#run-submit').addEventListener('click', startRun);
 
