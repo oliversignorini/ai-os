@@ -1,0 +1,6 @@
+node_modules/
+.DS_Store
+*.log
+data/runs.jsonl
+data/runs/
+data/config.json
