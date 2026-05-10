@@ -211,6 +211,9 @@
       });
       const { runId } = await r.json();
       currentRunId = runId;
+      localStorage.setItem('agentic-os.currentRunId', runId);
+      localStorage.setItem('agentic-os.currentSkillId', skill.id);
+      localStorage.setItem('agentic-os.currentPrompt', prompt);
       attachStream(runId);
     }
 
@@ -228,9 +231,12 @@
       };
 
       currentEventSource.onerror = () => {
-        // SSE close from server fires onerror in some browsers — close gracefully
+        // SSE close fires onerror on natural end OR disconnect.
+        // Reset UI but DO NOT clear localStorage — a reload mid-stream
+        // should be able to reattach via Task 15's maybeReattach.
         currentEventSource.close();
-        onRunComplete();
+        $('#run-submit').classList.remove('hidden');
+        $('#run-stop').classList.add('hidden');
       };
     }
 
@@ -239,6 +245,10 @@
       $('#run-stop').classList.add('hidden');
       loadHistory();
       loadVaultChanges();
+      localStorage.removeItem('agentic-os.currentRunId');
+      localStorage.removeItem('agentic-os.currentSkillId');
+      localStorage.removeItem('agentic-os.currentPrompt');
+      currentRunId = null;
     }
 
     const pendingTools = new Map(); // tool_use_id → DOM details element
@@ -409,10 +419,31 @@
       renderSkills(filtered);
     });
 
+    async function maybeReattach() {
+      const runId = localStorage.getItem('agentic-os.currentRunId');
+      const skillId = localStorage.getItem('agentic-os.currentSkillId');
+      const prompt = localStorage.getItem('agentic-os.currentPrompt');
+      if (!runId || !skillId) return;
+
+      const skill = allSkills.find(s => s.id === skillId);
+      if (!skill) {
+        localStorage.removeItem('agentic-os.currentRunId');
+        return;
+      }
+
+      openRunPane(skill);
+      $('#run-prompt').value = prompt || `/${skill.name}`;
+      $('#run-submit').classList.add('hidden');
+      $('#run-stop').classList.remove('hidden');
+      currentRunId = runId;
+      attachStream(runId);
+    }
+
     (async () => {
       bootBars();
       await loadSkills(); // history depends on allSkills cache
       loadHistory();
+      maybeReattach();
     })();
   </script>
 </body>
